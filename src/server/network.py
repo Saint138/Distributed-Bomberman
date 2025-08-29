@@ -1,5 +1,6 @@
 # server/network.py
 import json
+from time import time as now 
 
 def handle_client(conn, addr, clients, game, player_id):
     print(f"[NEW] {addr} -> Player {player_id}")
@@ -24,4 +25,8 @@ def handle_client(conn, addr, clients, game, player_id):
             clients.remove(conn)
         except ValueError:
             pass
-        conn.close()
+    conn.close()
+    if player_id in game.players:
+        game.players[player_id]["alive"] = False
+        game.players[player_id]["disconnected"] = True
+        game.players[player_id]["disconnect_time"] = now()
