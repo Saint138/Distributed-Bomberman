@@ -1,4 +1,5 @@
 import random
+import time
 
 # server/game_logic.py
 MAP_WIDTH = 15
@@ -37,7 +38,11 @@ class GameState:
     def add_player(self, player_id):
         spawn = [(1,1), (1, MAP_HEIGHT-2), (MAP_WIDTH-2,1), (MAP_WIDTH-2, MAP_HEIGHT-2)]
         x,y = spawn[player_id % len(spawn)]
-        self.players[player_id] = {"x": x, "y": y, "alive": True, "lives": 3}
+        self.players[player_id] = {
+            "x": x, "y": y, "alive": True, "lives": 3,
+            "disconnected": False, "disconnect_time": None   # <-- aggiunti
+        }
+
 
     def move_player(self, player_id, direction):
         if player_id not in self.players or not self.players[player_id]["alive"]:
@@ -59,6 +64,13 @@ class GameState:
             exp["timer"] -= 1
             if exp["timer"] <= 0:
                 self.explosions.remove(exp)
+
+        now = time.time()
+        for pid in list(self.players):
+            pdata = self.players[pid]
+            if pdata.get("disconnected") and pdata.get("disconnect_time") and now - pdata["disconnect_time"] > 20:
+                print(f"[TIMEOUT] Player {pid} removed from game")
+                del self.players[pid]
 
     def get_state(self):
         return {
