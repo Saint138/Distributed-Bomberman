@@ -14,6 +14,8 @@ def handle_client(conn, addr, clients, game, player_id):
             msg = data.decode().strip().upper()
             if msg in {"UP","DOWN","LEFT","RIGHT"}:
                 game.move_player(player_id, msg)
+            elif msg == "BOMB":
+                game.place_bomb(player_id)
     except ConnectionResetError:
         pass
     finally:
