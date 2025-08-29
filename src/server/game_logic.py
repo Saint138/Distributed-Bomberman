@@ -1,14 +1,21 @@
+import random
+
 # server/game_logic.py
 MAP_WIDTH = 15
 MAP_HEIGHT = 13
 
 TILE_EMPTY = 0
-TILE_WALL = 1
+TILE_WALL  = 1
+TILE_BLOCK = 2  # <-- nuovo: blocco distruttibile
+TILE_BOMB  = 3
+TILE_FIRE  = 4
 
 class GameState:
     def __init__(self):
         self.map = self._generate_map()
-        self.players = {}  # pid -> {"x","y","alive","lives"}
+        self.players = {}
+        self.bombs = []        # <-- prepariamo già le liste
+        self.explosions = []   # <-- per step successivi
 
     def _generate_map(self):
         # mura perimetrali, interno vuoto (versione minimale)
@@ -39,3 +46,20 @@ class GameState:
 
     def get_state(self):
         return {"map": self.map, "players": self.players}
+    
+    def _generate_map(self):
+        spawn_safe_zones = {(1, 1), (1, 2), (2, 1),
+                            (1, MAP_HEIGHT - 2), (1, MAP_HEIGHT - 3), (2, MAP_HEIGHT - 2),
+                            (MAP_WIDTH - 2, 1), (MAP_WIDTH - 3, 1), (MAP_WIDTH - 2, 2),
+                            (MAP_WIDTH - 2, MAP_HEIGHT - 2), (MAP_WIDTH - 2, MAP_HEIGHT - 3), (MAP_WIDTH - 3, MAP_HEIGHT - 2)}
+
+        m = [[TILE_EMPTY for _ in range(MAP_WIDTH)] for _ in range(MAP_HEIGHT)]
+        for y in range(MAP_HEIGHT):
+            for x in range(MAP_WIDTH):
+                if x == 0 or y == 0 or x == MAP_WIDTH - 1 or y == MAP_HEIGHT - 1:
+                    m[y][x] = TILE_WALL
+                elif x % 2 == 0 and y % 2 == 0:
+                    m[y][x] = TILE_WALL
+                elif (x, y) not in spawn_safe_zones and random.random() < 0.2:
+                    m[y][x] = TILE_BLOCK
+        return m
