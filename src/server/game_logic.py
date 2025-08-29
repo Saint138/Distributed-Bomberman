@@ -61,7 +61,12 @@ class GameState:
                 self.explosions.remove(exp)
 
     def get_state(self):
-        return {"map": self.map, "players": self.players}
+        return {
+            "map": self.map,
+            "players": self.players,
+            "bombs": self.bombs,
+            "explosions": self.explosions
+        }
     
     def place_bomb(self, player_id):
         if player_id not in self.players:
@@ -72,3 +77,32 @@ class GameState:
         x, y = p["x"], p["y"]
         # aggiungi una bomba con timer 20 tick
         self.bombs.append({"x": x, "y": y, "timer": 20, "owner": player_id})
+
+    def explode_bomb(self, bomb):
+        x, y = bomb["x"], bomb["y"]
+        affected = [(x, y)]
+        directions = [(-1,0),(1,0),(0,-1),(0,1)]
+        explosion_range = 2
+
+        for dx, dy in directions:
+            for r in range(1, explosion_range + 1):
+                nx, ny = x + dx*r, y + dy*r
+                if not (0 <= nx < MAP_WIDTH and 0 <= ny < MAP_HEIGHT):
+                    break
+                tile = self.map[ny][nx]
+                if tile == TILE_WALL:
+                    break
+                affected.append((nx, ny))
+                if tile == TILE_BLOCK:
+                    self.map[ny][nx] = TILE_EMPTY
+                    break
+
+        # danno ai player colpiti
+        for pid, pdata in self.players.items():
+            if pdata["alive"] and (pdata["x"], pdata["y"]) in affected:
+                pdata["lives"] -= 1
+                if pdata["lives"] <= 0:
+                    pdata["alive"] = False
+
+        # traccia esplosione attiva per 5 tick
+        self.explosions.append({"positions": affected, "timer": 5})
