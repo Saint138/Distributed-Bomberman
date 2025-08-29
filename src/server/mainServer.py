@@ -32,15 +32,42 @@ def start_server():
     srv.listen()
     print("[SERVER] in ascolto su localhost:5555")
 
+    # Avvia loop di gioco
     threading.Thread(target=game_loop, daemon=True).start()
 
+    # Loop di accept + gestione reconnect/nuovo player
     while True:
         conn, addr = srv.accept()
-        pid = player_id_counter
-        player_id_counter += 1
-        game.add_player(pid)
-        clients.append(conn)
-        threading.Thread(target=handle_client, args=(conn, addr, clients, game, pid), daemon=True).start()
+
+        # tenta rientro entro 20s
+        reconnected = False
+        for pid, pdata in list(game.players.items()):
+            if pdata.get("disconnected") and pdata.get("disconnect_time"):
+                if time.time() - pdata["disconnect_time"] <= 20:
+                    print(f"[RECONNECTED] Player {pid} da {addr}")
+                    pdata["disconnected"] = False
+                    pdata["alive"] = True
+                    pdata.pop("disconnect_time", None)
+                    clients.append(conn)
+                    threading.Thread(
+                        target=handle_client,
+                        args=(conn, addr, clients, game, pid),
+                        daemon=True
+                    ).start()
+                    reconnected = True
+                    break
+
+        if not reconnected:
+            # nuovo player
+            pid = player_id_counter
+            player_id_counter += 1
+            game.add_player(pid)
+            clients.append(conn)
+            threading.Thread(
+                target=handle_client,
+                args=(conn, addr, clients, game, pid),
+                daemon=True
+            ).start()
 
 if __name__ == "__main__":
     start_server()
