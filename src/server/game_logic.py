@@ -18,36 +18,6 @@ class GameState:
         self.explosions = []   # <-- per step successivi
 
     def _generate_map(self):
-        # mura perimetrali, interno vuoto (versione minimale)
-        m = [[TILE_EMPTY for _ in range(MAP_WIDTH)] for _ in range(MAP_HEIGHT)]
-        for y in range(MAP_HEIGHT):
-            for x in range(MAP_WIDTH):
-                if x == 0 or y == 0 or x == MAP_WIDTH-1 or y == MAP_HEIGHT-1:
-                    m[y][x] = TILE_WALL
-        return m
-
-    def add_player(self, player_id):
-        spawn = [(1,1), (1, MAP_HEIGHT-2), (MAP_WIDTH-2,1), (MAP_WIDTH-2, MAP_HEIGHT-2)]
-        x,y = spawn[player_id % len(spawn)]
-        self.players[player_id] = {"x": x, "y": y, "alive": True, "lives": 3}
-
-    def move_player(self, player_id, direction):
-        if player_id not in self.players or not self.players[player_id]["alive"]:
-            return
-        dx, dy = {"UP":(0,-1), "DOWN":(0,1), "LEFT":(-1,0), "RIGHT":(1,0)}.get(direction, (0,0))
-        px, py = self.players[player_id]["x"], self.players[player_id]["y"]
-        nx, ny = px + dx, py + dy
-        if 0 <= nx < MAP_WIDTH and 0 <= ny < MAP_HEIGHT and self.map[ny][nx] == TILE_EMPTY:
-            self.players[player_id]["x"], self.players[player_id]["y"] = nx, ny
-
-    def tick(self):
-        # niente logica temporale per ora
-        pass
-
-    def get_state(self):
-        return {"map": self.map, "players": self.players}
-    
-    def _generate_map(self):
         spawn_safe_zones = {(1, 1), (1, 2), (2, 1),
                             (1, MAP_HEIGHT - 2), (1, MAP_HEIGHT - 3), (2, MAP_HEIGHT - 2),
                             (MAP_WIDTH - 2, 1), (MAP_WIDTH - 3, 1), (MAP_WIDTH - 2, 2),
@@ -63,6 +33,35 @@ class GameState:
                 elif (x, y) not in spawn_safe_zones and random.random() < 0.2:
                     m[y][x] = TILE_BLOCK
         return m
+
+    def add_player(self, player_id):
+        spawn = [(1,1), (1, MAP_HEIGHT-2), (MAP_WIDTH-2,1), (MAP_WIDTH-2, MAP_HEIGHT-2)]
+        x,y = spawn[player_id % len(spawn)]
+        self.players[player_id] = {"x": x, "y": y, "alive": True, "lives": 3}
+
+    def move_player(self, player_id, direction):
+        if player_id not in self.players or not self.players[player_id]["alive"]:
+            return
+        dx, dy = {"UP":(0,-1), "DOWN":(0,1), "LEFT":(-1,0), "RIGHT":(1,0)}.get(direction, (0,0))
+        px, py = self.players[player_id]["x"], self.players[player_id]["y"]
+        nx, ny = px + dx, py + dy
+        if 0 <= nx < MAP_WIDTH and 0 <= ny < MAP_HEIGHT and self.map[ny][nx] == TILE_EMPTY:
+            self.players[player_id]["x"], self.players[player_id]["y"] = nx, ny
+    
+    def tick(self):
+        for b in list(self.bombs):
+            b["timer"] -= 1
+            if b["timer"] <= 0:
+                self.explode_bomb(b)
+                self.bombs.remove(b)
+
+        for exp in list(self.explosions):
+            exp["timer"] -= 1
+            if exp["timer"] <= 0:
+                self.explosions.remove(exp)
+
+    def get_state(self):
+        return {"map": self.map, "players": self.players}
     
     def place_bomb(self, player_id):
         if player_id not in self.players:
