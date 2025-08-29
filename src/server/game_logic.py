@@ -63,3 +63,13 @@ class GameState:
                 elif (x, y) not in spawn_safe_zones and random.random() < 0.2:
                     m[y][x] = TILE_BLOCK
         return m
+    
+    def place_bomb(self, player_id):
+        if player_id not in self.players:
+            return
+        p = self.players[player_id]
+        if not p["alive"]:
+            return
+        x, y = p["x"], p["y"]
+        # aggiungi una bomba con timer 20 tick
+        self.bombs.append({"x": x, "y": y, "timer": 20, "owner": player_id})
