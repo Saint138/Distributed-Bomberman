@@ -31,9 +31,18 @@ class BombermanClient:
             (self.map_width_px + self.sidebar_width, self.map_height_px)
         )
         self.font = pygame.font.SysFont("Arial", 20)
+        self.small_font = pygame.font.SysFont("Arial", 16)
+        self.title_font = pygame.font.SysFont("Arial", 36, bold=True)
+        self.big_font = pygame.font.SysFont("Arial", 48, bold=True)
         pygame.display.set_caption("Bomberman")
         self.clock = pygame.time.Clock()
         self.state = None
+
+        # Chat input
+        self.chat_input = ""
+        self.chat_active = False
+        self.cursor_visible = True
+        self.cursor_timer = 0
 
         threading.Thread(target=self.receive_state, daemon=True).start()
 
