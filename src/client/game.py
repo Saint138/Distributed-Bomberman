@@ -23,9 +23,11 @@ class BombermanClient:
         pygame.init()
         self.sock = sock
         self.player_id = None
+        self.is_spectator = False
+        self.session_id = self.generate_session_id()   # ID persistente del client
         self.map_width_px = 15 * TILE_SIZE
         self.map_height_px = 13 * TILE_SIZE
-        self.sidebar_width = 200  # spazio per mostrare le vite
+        self.sidebar_width = 200
 
         self.screen = pygame.display.set_mode(
             (self.map_width_px + self.sidebar_width, self.map_height_px)
@@ -44,6 +46,25 @@ class BombermanClient:
         self.cursor_visible = True
         self.cursor_timer = 0
 
+
+        # Colori migliorati
+        self.COLORS = {
+            'bg_dark': (15, 15, 20),
+            'bg_medium': (25, 25, 35),
+            'bg_light': (35, 35, 45),
+            'border': (60, 60, 80),
+            'border_light': (80, 80, 100),
+            'text_primary': (255, 255, 255),
+            'text_secondary': (200, 200, 200),
+            'text_disabled': (120, 120, 120),
+            'success': (50, 255, 100),
+            'danger': (255, 80, 80),
+            'warning': (255, 200, 50),
+            'info': (100, 200, 255)
+        }
+
+
+
         threading.Thread(target=self.receive_state, daemon=True).start()
 
     def receive_state(self):
@@ -51,6 +72,10 @@ class BombermanClient:
         while True:
             try:
                 data = self.sock.recv(8192).decode()
+                if not data:
+                    print("Connection closed by server")
+                    break
+
                 buffer += data
 
                 while "\n" in buffer:
@@ -59,16 +84,52 @@ class BombermanClient:
                         continue
 
                     state = json.loads(line)
-                    print("RECEIVED STATE:", state)
 
-                    if "player_id" in state:
+                    # Controlla se è una conversione da spettatore a giocatore
+                    if "conversion_success" in state and state["conversion_success"]:
+                        self.player_id = state["new_player_id"]
+                        self.is_spectator = False
+                        print(f"Converted to Player {self.player_id}")
+                    elif "player_id" in state:
                         self.player_id = state["player_id"]
+                        self.is_spectator = state.get("is_spectator", False)
+                        print(f"Received ID: {self.player_id} (Spectator: {self.is_spectator})")
                     else:
                         self.state = state
 
             except Exception as e:
                 print("Error receiving state:", e)
                 break
+
+    def draw_gradient_rect(self, surface, color1, color2, rect, vertical=True):
+        """Disegna un rettangolo con gradiente."""
+        x, y, w, h = rect
+        if vertical:
+            for i in range(h):
+                ratio = i / h
+                r = int(color1[0] * (1 - ratio) + color2[0] * ratio)
+                g = int(color1[1] * (1 - ratio) + color2[1] * ratio)
+                b = int(color1[2] * (1 - ratio) + color2[2] * ratio)
+                pygame.draw.line(surface, (r, g, b), (x, y + i), (x + w, y + i))
+        else:
+            for i in range(w):
+                ratio = i / w
+                r = int(color1[0] * (1 - ratio) + color2[0] * ratio)
+                g = int(color1[1] * (1 - ratio) + color2[1] * ratio)
+                b = int(color1[2] * (1 - ratio) + color2[2] * ratio)
+                pygame.draw.line(surface, (r, g, b), (x + i, y), (x + i, y + h))
+
+    def draw_rounded_rect(self, surface, color, rect, radius=10):
+        """Disegna un rettangolo arrotondato."""
+        x, y, w, h = rect
+        # Rettangoli principali
+        pygame.draw.rect(surface, color, (x + radius, y, w - 2 * radius, h))
+        pygame.draw.rect(surface, color, (x, y + radius, w, h - 2 * radius))
+        # Angoli
+        pygame.draw.circle(surface, color, (x + radius, y + radius), radius)
+        pygame.draw.circle(surface, color, (x + w - radius, y + radius), radius)
+        pygame.draw.circle(surface, color, (x + radius, y + h - radius), radius)
+        pygame.draw.circle(surface, color, (x + w - radius, y + h - radius), radius)
 
 
 
@@ -145,3 +206,9 @@ class BombermanClient:
 
 
         pygame.display.flip()
+
+    def send_command(self, command):
+        try:
+            self.sock.sendall(command.encode('utf-8'))
+        except:
+            pass
