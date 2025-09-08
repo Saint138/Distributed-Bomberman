@@ -1,22 +1,27 @@
 import random
 import time
 
-# server/game_logic.py
 MAP_WIDTH = 15
 MAP_HEIGHT = 13
 
 TILE_EMPTY = 0
 TILE_WALL  = 1
-TILE_BLOCK = 2  # <-- nuovo: blocco distruttibile
+TILE_BLOCK = 2  
 TILE_BOMB  = 3
 TILE_FIRE  = 4
+
+BOMB_TIMER_TICKS     = 20  
+EXPLOSION_RANGE      = 2
+EXPLOSION_TTL_TICKS  = 5
+RECONNECT_TIMEOUT_S  = 20
+MAX_BOMBS_PER_PLAYER = 1
 
 class GameState:
     def __init__(self):
         self.map = self._generate_map()
         self.players = {}
-        self.bombs = []        # <-- prepariamo già le liste
-        self.explosions = []   # <-- per step successivi
+        self.bombs = []
+        self.explosions = []
 
     def _generate_map(self):
         spawn_safe_zones = {(1, 1), (1, 2), (2, 1),
@@ -68,7 +73,7 @@ class GameState:
         now = time.time()
         for pid in list(self.players):
             pdata = self.players[pid]
-            if pdata.get("disconnected") and pdata.get("disconnect_time") and now - pdata["disconnect_time"] > 20:
+            if pdata.get("disconnected") and pdata.get("disconnect_time") and now - pdata["disconnect_time"] > RECONNECT_TIMEOUT_S:
                 print(f"[TIMEOUT] Player {pid} removed from game")
                 del self.players[pid]
 
@@ -88,13 +93,13 @@ class GameState:
             return
         x, y = p["x"], p["y"]
         # aggiungi una bomba con timer 20 tick
-        self.bombs.append({"x": x, "y": y, "timer": 20, "owner": player_id})
+        self.bombs.append({"x": x, "y": y, "timer": BOMB_TIMER_TICKS, "owner": player_id})
 
     def explode_bomb(self, bomb):
         x, y = bomb["x"], bomb["y"]
         affected = [(x, y)]
         directions = [(-1,0),(1,0),(0,-1),(0,1)]
-        explosion_range = 2
+        explosion_range = EXPLOSION_RANGE
 
         for dx, dy in directions:
             for r in range(1, explosion_range + 1):
@@ -117,4 +122,4 @@ class GameState:
                     pdata["alive"] = False
 
         # traccia esplosione attiva per 5 tick
-        self.explosions.append({"positions": affected, "timer": 5})
+        self.explosions.append({"positions": affected, "timer": EXPLOSION_TTL_TICKS})
