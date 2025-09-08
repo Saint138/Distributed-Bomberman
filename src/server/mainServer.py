@@ -57,25 +57,25 @@ def start_server():
                     reconnected = True
                     break
 
-            if not reconnected:
-            # lobby piena? rifiuta SOLO nuovi ingressi (i reconnect passano sopra)
-                if len(clients) >= MAX_PLAYERS:
-                    print("[SERVER] Lobby piena: rifiuto nuovo ingresso da", addr)
-                    try:
-                        conn.close()
-                    finally:
-                        continue
+        if not reconnected:
+        # lobby piena? rifiuta SOLO nuovi ingressi (i reconnect passano sopra)
+            if len(clients) >= MAX_PLAYERS:
+                print("[SERVER] Lobby piena: rifiuto nuovo ingresso da", addr)
+                try:
+                    conn.close()
+                finally:
+                    continue
 
-                # nuovo player
-                pid = player_id_counter
-                player_id_counter += 1
-                game.add_player(pid)
-                clients.append(conn)
-                threading.Thread(
-                    target=handle_client,
-                    args=(conn, addr, clients, game, pid),
-                    daemon=True
-                ).start()
+            # nuovo player
+            pid = player_id_counter
+            player_id_counter += 1
+            game.add_player(pid)
+            clients.append(conn)
+            threading.Thread(
+                target=handle_client,
+                args=(conn, addr, clients, game, pid),
+                daemon=True
+            ).start()
 
 
 if __name__ == "__main__":
