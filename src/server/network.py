@@ -5,9 +5,7 @@ from time import time as now
 def handle_client(conn, addr, clients, game, player_id):
     print(f"[NEW] {addr} -> Player {player_id}")
     try:
-        # invia il player_id al client
         conn.sendall((json.dumps({"player_id": player_id}) + "\n").encode())
-
         while True:
             data = conn.recv(1024)
             if not data:
@@ -25,8 +23,11 @@ def handle_client(conn, addr, clients, game, player_id):
             clients.remove(conn)
         except ValueError:
             pass
-    conn.close()
-    if player_id in game.players:
-        game.players[player_id]["alive"] = False
-        game.players[player_id]["disconnected"] = True
-        game.players[player_id]["disconnect_time"] = now()
+        try:
+            conn.close()
+        finally:
+            if player_id in game.players:
+                p = game.players[player_id]
+                p["alive"] = False
+                p["disconnected"] = True
+                p["disconnect_time"] = now()
