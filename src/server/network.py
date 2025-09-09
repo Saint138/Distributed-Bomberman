@@ -1,33 +1,44 @@
-# server/network.py
 import json
-from time import time as now 
 
-def handle_client(conn, addr, clients, game, player_id):
-    print(f"[NEW] {addr} -> Player {player_id}")
+def handle_client(conn, addr, clients, game, user_id, is_spectator=False, player_slots=None, preread_handshake=None):
+    user_type = "Spectator" if is_spectator else "Player"
+    print(f"[HANDLER] start {user_type} {user_id} from {addr}")
+
+    client_id = None
     try:
-        conn.sendall((json.dumps({"player_id": player_id}) + "\n").encode())
+        if preread_handshake:
+            try:
+                hs = json.loads(preread_handshake.decode().strip())
+                if hs.get("type") == "handshake":
+                    client_id = hs.get("client_id")
+                    print(f"[HANDLER] client_id={client_id}")
+            except Exception as e:
+                print(f"[HANDLER] handshake parse error: {e}")
+
+        # manda identità
+        conn.sendall((json.dumps({"player_id": user_id, "is_spectator": is_spectator}) + "\n").encode())
+
+        # loop
         while True:
             data = conn.recv(1024)
             if not data:
                 break
-            msg = data.decode().strip().upper()
-            if msg in {"UP","DOWN","LEFT","RIGHT"}:
-                game.move_player(player_id, msg)
-            elif msg == "BOMB":
-                game.place_bomb(player_id)
+            try:
+                message = data.decode("utf-8").strip()
+            except UnicodeDecodeError:
+                continue
+            if not message:
+                continue
+            # in questo step non gestiamo ancora comandi
+
     except ConnectionResetError:
         pass
+    except Exception as e:
+        print(f"[HANDLER] error: {e}")
     finally:
-        print(f"[DISCONNECTED] {addr} (Player {player_id})")
-        try:
-            clients.remove(conn)
-        except ValueError:
-            pass
-        try:
-            conn.close()
-        finally:
-            if player_id in game.players:
-                p = game.players[player_id]
-                p["alive"] = False
-                p["disconnected"] = True
-                p["disconnect_time"] = now()
+        try: conn.close()
+        except: pass
+        if conn in clients:
+            try: clients.remove(conn)
+            except ValueError: pass
+        print(f"[HANDLER] end {user_type} {user_id} from {addr}")

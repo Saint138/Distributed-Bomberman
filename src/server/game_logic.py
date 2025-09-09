@@ -23,6 +23,7 @@ class GameState:
         self.players = {}       
         self.bombs = []        
         self.explosions = []   
+        self.client_player_mapping = {}
 
     # ---------------- Map/Spawn ----------------
 
@@ -50,8 +51,10 @@ class GameState:
         x, y = spawn[player_id % len(spawn)]
         self.players[player_id] = {
             "x": x, "y": y, "alive": True, "lives": 3,
-            "disconnected": False, "disconnect_time": None
+            "disconnected": False, "disconnect_time": None,
+            "disconnect_time_left": 0
         }
+
 
     # ---------------- Movement ----------------
 

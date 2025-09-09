@@ -9,6 +9,18 @@ clients = []
 MAX_PLAYERS = 4
 game = GameState()
 player_id_counter = 0
+player_slots = [False, False, False, False]
+
+def get_free_player_slot():
+    """Trova il primo slot libero per un giocatore."""
+    for i in range(MAX_PLAYERS):
+        if not player_slots[i]:
+            # Verifica anche che non ci sia un player in timeout
+            if (i not in game.players or
+                (game.players[i].get("disconnected", False) and 
+                 game.players[i].get("disconnect_time_left", 0) <= 0)):
+                return i
+    return None
 
 def game_loop():
     while True:
@@ -38,44 +50,42 @@ def start_server():
     # Loop di accept + gestione reconnect/nuovo player
     while True:
         conn, addr = srv.accept()
+        print(f"[NEW CONNECTION] {addr} connecting...")
+        try:
+            handshake_data = conn.recv(1024)
+            if not handshake_data:
+                print(f"[ERROR] No handshake received from {addr}")
+                conn.close(); continue
+            hs = json.loads(handshake_data.decode().strip())
+            if hs.get("type") != "handshake" or not hs.get("client_id"):
+                print(f"[ERROR] Invalid handshake from {addr}")
+                conn.close(); continue
+            client_id = hs["client_id"]
+            print(f"[HANDSHAKE] Client {client_id} from {addr}")
+        except Exception as e:
+            print(f"[ERROR] Handshake read error from {addr}: {e}")
+            try: conn.close()
+            except: pass
+            continue
 
-        # tenta rientro entro 20s
-        reconnected = False
-        for pid, pdata in list(game.players.items()):
-            if pdata.get("disconnected") and pdata.get("disconnect_time"):
-                if time.time() - pdata["disconnect_time"] <= 20:
-                    print(f"[RECONNECTED] Player {pid} da {addr}")
-                    pdata["disconnected"] = False
-                    pdata["alive"] = True
-                    pdata.pop("disconnect_time", None)
-                    clients.append(conn)
-                    threading.Thread(
-                        target=handle_client,
-                        args=(conn, addr, clients, game, pid),
-                        daemon=True
-                    ).start()
-                    reconnected = True
-                    break
+        # per ora: sempre player “nuovo”
+        free_slot = get_free_player_slot()
+        if free_slot is None:
+            # temporaneamente rifiutiamo se pieno (nel prossimo step aggiungiamo spettatori)
+            print(f"[SERVER] Lobby piena, rifiuto {addr}")
+            conn.close(); continue
 
-        if not reconnected:
-        # lobby piena? rifiuta SOLO nuovi ingressi (i reconnect passano sopra)
-            if len(clients) >= MAX_PLAYERS:
-                print("[SERVER] Lobby piena: rifiuto nuovo ingresso da", addr)
-                try:
-                    conn.close()
-                finally:
-                    continue
+        player_slots[free_slot] = True
+        game.add_player(free_slot)
+        clients.append(conn)
+        threading.Thread(
+            target=handle_client,
+            args=(conn, addr, clients, game, free_slot, False, player_slots, handshake_data),
+            daemon=True
+        ).start()
+        print(f"[PLAYER] {addr} -> Player {free_slot}")
 
-            # nuovo player
-            pid = player_id_counter
-            player_id_counter += 1
-            game.add_player(pid)
-            clients.append(conn)
-            threading.Thread(
-                target=handle_client,
-                args=(conn, addr, clients, game, pid),
-                daemon=True
-            ).start()
+
 
 
 if __name__ == "__main__":
