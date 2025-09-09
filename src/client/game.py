@@ -1,6 +1,13 @@
 import pygame
 import json
 import threading
+import os
+import uuid
+import math
+import random
+import time
+import hashlib
+import platform
 
 TILE_SIZE = 32
 TILE_COLORS = {
@@ -11,6 +18,12 @@ TILE_COLORS = {
     4: (255, 165, 0),    # fire
 }
 
+TILE_EMPTY = 0
+TILE_WALL = 1
+TILE_BLOCK = 2
+TILE_BOMB = 3
+TILE_FIRE = 4
+
 PLAYER_COLORS = [
     (0, 255, 0),
     (0, 0, 255),
@@ -19,12 +32,20 @@ PLAYER_COLORS = [
 ]
 
 class BombermanClient:
+
     def __init__(self, sock):
         pygame.init()
         self.sock = sock
         self.player_id = None
         self.is_spectator = False
-        self.session_id = self.generate_session_id()   # ID persistente del client
+        self.session_id = self.generate_session_id()
+        self.player_name = None
+        self.current_screen = "name_entry"
+        self.name_input = ""
+        self.name_input_active = True
+        self.join_error_message = ""
+        self.error_timer = 0
+
         self.map_width_px = 15 * TILE_SIZE
         self.map_height_px = 13 * TILE_SIZE
         self.sidebar_width = 200
@@ -46,6 +67,8 @@ class BombermanClient:
         self.cursor_visible = True
         self.cursor_timer = 0
 
+        # Animazioni
+        self.animation_timer = 0
 
         # Colori migliorati
         self.COLORS = {
@@ -63,43 +86,8 @@ class BombermanClient:
             'info': (100, 200, 255)
         }
 
-
-
+        # NON inviare handshake automaticamente - aspettiamo il nome
         threading.Thread(target=self.receive_state, daemon=True).start()
-
-    def receive_state(self):
-        buffer = ""
-        while True:
-            try:
-                data = self.sock.recv(8192).decode()
-                if not data:
-                    print("Connection closed by server")
-                    break
-
-                buffer += data
-
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
-                    if not line.strip():
-                        continue
-
-                    state = json.loads(line)
-
-                    # Controlla se è una conversione da spettatore a giocatore
-                    if "conversion_success" in state and state["conversion_success"]:
-                        self.player_id = state["new_player_id"]
-                        self.is_spectator = False
-                        print(f"Converted to Player {self.player_id}")
-                    elif "player_id" in state:
-                        self.player_id = state["player_id"]
-                        self.is_spectator = state.get("is_spectator", False)
-                        print(f"Received ID: {self.player_id} (Spectator: {self.is_spectator})")
-                    else:
-                        self.state = state
-
-            except Exception as e:
-                print("Error receiving state:", e)
-                break
 
     def draw_gradient_rect(self, surface, color1, color2, rect, vertical=True):
         """Disegna un rettangolo con gradiente."""
@@ -131,11 +119,71 @@ class BombermanClient:
         pygame.draw.circle(surface, color, (x + radius, y + h - radius), radius)
         pygame.draw.circle(surface, color, (x + w - radius, y + h - radius), radius)
 
+    def receive_state(self):
+        buffer = ""
+        while True:
+            try:
+                data = self.sock.recv(8192).decode()
+                if not data:
+                    print("Connection closed by server")
+                    break
 
+                buffer += data
+
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    if not line.strip():
+                        continue
+
+                    response = json.loads(line)
+
+                    # Gestisce errori di join
+                    if "error" in response:
+                        error_type = response["error"]
+                        details = response.get("details", "")
+
+                        if error_type == "name_taken":
+                            if details:
+                                self.show_error(f"Nome già in uso: {details}")
+                            else:
+                                self.show_error("Nome già in uso!")
+                        elif error_type == "name_too_short":
+                            self.show_error("Nome troppo corto!")
+                        elif error_type == "invalid_request":
+                            self.show_error("Richiesta non valida!")
+                        elif error_type == "session_mismatch":
+                            self.show_error("Errore sessione!")
+                        elif error_type == "server_error":
+                            self.show_error("Errore del server!")
+                        else:
+                            self.show_error("Errore sconosciuto!")
+                        continue
+
+                    # Gestisce risposta di join con successo
+                    if "join_success" in response and response["join_success"]:
+                        self.player_id = response["player_id"]
+                        self.is_spectator = response.get("is_spectator", False)
+                        self.player_name = response.get("player_name", "")
+                        self.current_screen = "lobby"
+                        print(f"Successfully joined as {self.player_name}")
+                        continue
+
+                    # Controlla se è una conversione da spettatore a giocatore
+                    if "conversion_success" in response and response["conversion_success"]:
+                        self.player_id = response["new_player_id"]
+                        self.is_spectator = False
+                        print(f"Converted to Player {self.player_id}")
+                    else:
+                        # Stato normale del gioco
+                        self.state = response
+
+            except Exception as e:
+                print("Error receiving state:", e)
+                break
 
     def send_command(self, command):
         try:
-            self.sock.sendall(command.encode())
+            self.sock.sendall(command.encode('utf-8'))
         except:
             pass
 
@@ -143,23 +191,44 @@ class BombermanClient:
         running = True
         while running:
             self.clock.tick(30)
+
+            # Aggiorna il cursore lampeggiante
+            self.cursor_timer += 1
+            if self.cursor_timer >= 15:
+                self.cursor_visible = not self.cursor_visible
+                self.cursor_timer = 0
+
+            # Aggiorna timer errori
+            if self.error_timer > 0:
+                self.error_timer -= 1
+                if self.error_timer <= 0:
+                    self.join_error_message = ""
+
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_UP:
-                        self.send_command("UP")
-                    elif event.key == pygame.K_DOWN:
-                        self.send_command("DOWN")
-                    elif event.key == pygame.K_LEFT:
-                        self.send_command("LEFT")
-                    elif event.key == pygame.K_RIGHT:
-                        self.send_command("RIGHT")
-                    elif event.key == pygame.K_SPACE:
-                        self.send_command("BOMB")
+                    if self.current_screen == "name_entry":
+                        self.handle_name_entry_input(event)
+                    elif self.current_screen in ["lobby", "game", "victory"]:
+                        self.handle_game_input(event)
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    if event.button == 1:  # Click sinistro
+                        self.handle_mouse_click(event.pos)
 
-            if self.state:
-                self.draw()
+            # Renderizza la schermata appropriata
+            if self.current_screen == "name_entry":
+                self.draw_name_entry()
+            elif self.state:
+                if self.state.get("game_state") == "lobby":
+                    self.current_screen = "lobby"
+                    self.draw_lobby()
+                elif self.state.get("game_state") == "playing":
+                    self.current_screen = "game"
+                    self.draw_game()
+                elif self.state.get("game_state") == "victory":
+                    self.current_screen = "victory"
+                    self.draw_victory()
 
         pygame.quit()
 
@@ -951,8 +1020,501 @@ class BombermanClient:
             chat_hint = self.small_font.render("Press T to chat", True, (150, 150, 150))
             self.screen.blit(chat_hint, (chat_x + 5, input_y + 2))
 
-    def send_command(self, command):
+    def generate_session_id(self):
+        """Genera un ID di sessione univoco basato su PID + timestamp + MAC address."""
         try:
-            self.sock.sendall(command.encode('utf-8'))
-        except:
-            pass
+            import psutil
+
+            # PID del processo corrente
+            pid = os.getpid()
+
+            # Timestamp di avvio del processo (più preciso del tempo corrente)
+            process = psutil.Process(pid)
+            start_time = process.create_time()
+
+            # MAC address della prima interfaccia di rete
+            mac_address = None
+            for interface, addrs in psutil.net_if_addrs().items():
+                for addr in addrs:
+                    if addr.family == psutil.AF_LINK and addr.address and addr.address != "00:00:00:00:00:00":
+                        mac_address = addr.address
+                        break
+                if mac_address:
+                    break
+
+            # Se non troviamo il MAC, usa hostname + user
+            if not mac_address:
+                mac_address = f"{platform.node()}_{os.getlogin()}"
+
+            # Combina tutti i dati
+            session_data = f"{pid}_{start_time}_{mac_address}_{platform.system()}"
+
+            # Genera hash SHA256 e prendi i primi 16 caratteri
+            session_id = hashlib.sha256(session_data.encode()).hexdigest()[:16]
+
+            print(f"[SESSION] Generated session ID: {session_id}")
+            print(f"[SESSION] Based on: PID={pid}, START={start_time}, MAC={mac_address}")
+
+            return session_id
+
+        except ImportError:
+            print("[SESSION] psutil not available, using fallback method")
+            return self.generate_session_id_fallback()
+        except Exception as e:
+            print(f"[SESSION] Error generating session ID: {e}, using fallback")
+            return self.generate_session_id_fallback()
+
+    def generate_session_id_fallback(self):
+        """Metodo fallback per generare session ID senza psutil."""
+        try:
+            # PID del processo
+            pid = os.getpid()
+
+            # Timestamp corrente con microsecondi
+            timestamp = time.time()
+
+            # Hostname del sistema
+            hostname = platform.node()
+
+            # Username (se disponibile)
+            try:
+                username = os.getlogin()
+            except:
+                username = os.environ.get('USER', os.environ.get('USERNAME', 'unknown'))
+
+            # Sistema operativo
+            system = platform.system()
+
+            # Combina tutti i dati
+            session_data = f"{pid}_{timestamp}_{hostname}_{username}_{system}_{random.randint(1000, 9999)}"
+
+            # Genera hash
+            session_id = hashlib.sha256(session_data.encode()).hexdigest()[:16]
+
+            print(f"[SESSION FALLBACK] Generated session ID: {session_id}")
+            print(f"[SESSION FALLBACK] Based on: PID={pid}, HOST={hostname}, USER={username}")
+
+            return session_id
+
+        except Exception as e:
+            print(f"[SESSION FALLBACK] Error: {e}, using UUID")
+            return str(uuid.uuid4())[:16]
+
+
+
+    def send_session_handshake(self):
+        """Invia l'handshake di sessione al server."""
+        handshake = json.dumps({
+            "type": "session_handshake",
+            "session_id": self.session_id,
+            "timestamp": time.time(),
+            "platform": platform.system()
+        })
+        try:
+            self.sock.sendall((handshake + "\n").encode())
+            print(f"[CLIENT] Sent session handshake: {self.session_id}")
+        except Exception as e:
+            print(f"[CLIENT] Error sending session handshake: {e}")
+            raise
+
+    def handle_game_input(self, event):
+        """Gestisce l'input durante il gioco (lobby, partita, vittoria)."""
+        # Gestione chat (sempre disponibile)
+        if event.key == pygame.K_t and not self.chat_active:
+            self.chat_active = True
+            self.chat_input = ""
+        elif self.chat_active:
+            if event.key == pygame.K_RETURN:
+                if self.chat_input.strip():
+                    self.send_command(f"CHAT:{self.chat_input}")
+                self.chat_input = ""
+                self.chat_active = False
+            elif event.key == pygame.K_ESCAPE:
+                self.chat_input = ""
+                self.chat_active = False
+            elif event.key == pygame.K_BACKSPACE:
+                self.chat_input = self.chat_input[:-1]
+            else:
+                if event.unicode and len(self.chat_input) < 45:
+                    self.chat_input += event.unicode
+        # Tasto X per uscire temporaneamente (solo per giocatori in lobby)
+        elif (event.key == pygame.K_x and
+              self.current_screen == "lobby" and
+              not self.is_spectator and
+              not self.chat_active):
+            self.send_command("LEAVE_TEMPORARILY")
+            self.return_to_name_entry()
+        # Altri comandi del gioco
+        elif not self.chat_active:
+            if self.current_screen == "lobby":
+                self.handle_lobby_input(event)
+            elif self.current_screen == "game":
+                self.handle_game_play_input(event)
+            elif self.current_screen == "victory":
+                self.handle_victory_input(event)
+
+    def handle_lobby_input(self, event):
+        """Gestisce input specifici della lobby."""
+        if self.is_spectator:
+            if event.key == pygame.K_j:
+                connected_count = sum(1 for p in self.state["players"].values()
+                                      if not p.get("disconnected", False))
+                if connected_count < 4:
+                    self.send_command("JOIN_GAME")
+        else:
+            current_host = self.state.get("current_host_id", 0)
+            if event.key == pygame.K_RETURN and self.player_id == current_host:
+                if self.state.get("can_start", False):
+                    self.send_command("START_GAME")
+
+    def handle_game_play_input(self, event):
+        """Gestisce input durante la partita."""
+        if not self.is_spectator and self.state.get("game_state") == "playing":
+            if event.key == pygame.K_UP:
+                self.send_command("UP")
+            elif event.key == pygame.K_DOWN:
+                self.send_command("DOWN")
+            elif event.key == pygame.K_LEFT:
+                self.send_command("LEFT")
+            elif event.key == pygame.K_RIGHT:
+                self.send_command("RIGHT")
+            elif event.key == pygame.K_SPACE:
+                self.send_command("BOMB")
+
+    def handle_victory_input(self, event):
+        """Gestisce input nella schermata vittoria."""
+        if not self.is_spectator and event.key == pygame.K_RETURN:
+            self.send_command("PLAY_AGAIN")
+
+    def attempt_join_lobby(self):
+        """Tenta di entrare nella lobby con il nome specificato."""
+        self.player_name = self.name_input.strip()
+        try:
+            self.send_join_request()
+        except Exception as e:
+            self.show_error("Errore di connessione")
+            print(f"Error joining: {e}")
+
+    def send_join_request(self):
+        """Invia richiesta di join con nome al server."""
+        join_request = json.dumps({
+            "type": "join_request",
+            "session_id": self.session_id,
+            "player_name": self.player_name,
+            "timestamp": time.time()
+        })
+        try:
+            self.sock.sendall((join_request + "\n").encode())
+            print(f"[CLIENT] Sent join request for: {self.player_name}")
+        except Exception as e:
+            print(f"[CLIENT] Error sending join request: {e}")
+            raise
+
+    def return_to_name_entry(self):
+        """Torna alla schermata di inserimento nome."""
+        self.current_screen = "name_entry"
+        self.name_input = self.player_name or ""
+        self.name_input_active = True
+        self.join_error_message = ""
+        self.state = None
+
+    def show_error(self, message):
+        """Mostra un messaggio di errore temporaneo."""
+        self.join_error_message = message
+        self.error_timer = 120  # 4 secondi a 30 FPS invece di 3
+
+    def draw_name_entry(self):
+        """Disegna la schermata di inserimento nome e spiegazione del gioco senza sovrapposizioni."""
+        # Sfondo gradiente
+        self.draw_gradient_rect(self.screen, (20, 20, 30), (40, 40, 60),
+                                (0, 0, self.screen.get_width(), self.screen.get_height()))
+
+        # Aggiorna animazione
+        self.animation_timer += 1
+
+        # Titolo principale
+        title_text = "BOMBERMAN"
+        title = self.big_font.render(title_text, True, self.COLORS['text_primary'])
+        title_rect = title.get_rect(center=(self.screen.get_width() // 2, 40))
+        self.screen.blit(title, title_rect)
+
+        # Welcome subtitle
+        welcome_text = "Welcome to Bomberman!"
+        welcome = self.font.render(welcome_text, True, self.COLORS['warning'])
+        welcome_rect = welcome.get_rect(center=(self.screen.get_width() // 2, 75))
+        self.screen.blit(welcome, welcome_rect)
+
+        # Spiegazione del gioco con spaziatura corretta
+        current_y = 110
+
+        # HOW TO PLAY section
+        how_to_play_title = self.font.render("HOW TO PLAY:", True, self.COLORS['warning'])
+        how_to_play_rect = how_to_play_title.get_rect(center=(self.screen.get_width() // 2, current_y))
+        self.screen.blit(how_to_play_title, how_to_play_rect)
+        current_y += 30
+
+        game_rules = [
+            "• Move with arrow keys",
+            "• Place bombs with SPACEBAR",
+            "• Destroy blocks and eliminate opponents",
+            "• Last player standing wins!"
+        ]
+
+        for rule in game_rules:
+            rule_text = self.small_font.render(rule, True, self.COLORS['text_secondary'])
+            rule_rect = rule_text.get_rect(center=(self.screen.get_width() // 2, current_y))
+            self.screen.blit(rule_text, rule_rect)
+            current_y += 20
+
+        current_y += 20  # Spazio extra tra sezioni
+
+        # === SEZIONE NOME ===
+        # Box per inserimento nome con bordo evidenziato
+        name_box = pygame.Rect(150, current_y, 380, 50)
+
+        # Ombra del box
+        shadow_box = name_box.copy()
+        shadow_box.x += 3
+        shadow_box.y += 3
+        self.draw_rounded_rect(self.screen, (10, 10, 15), shadow_box, radius=15)
+
+        # Box principale con gradiente
+        self.draw_gradient_rect(self.screen, self.COLORS['bg_light'], self.COLORS['bg_medium'], name_box)
+
+        # Bordo animato se attivo
+        if self.name_input_active:
+            pulse = abs(math.sin(self.animation_timer * 0.05)) * 20
+            border_color = (100 + pulse, 200 + pulse, 100 + pulse)
+            pygame.draw.rect(self.screen, border_color, name_box, 3, border_radius=15)
+        else:
+            pygame.draw.rect(self.screen, self.COLORS['border'], name_box, 2, border_radius=15)
+
+        # Label per inserimento nome (sopra il box)
+        label = self.font.render("Enter your name (2-20 characters):", True, self.COLORS['text_primary'])
+        label_rect = label.get_rect(center=(self.screen.get_width() // 2, current_y - 25))
+        self.screen.blit(label, label_rect)
+
+        # Input nome centrato nel box
+        if self.name_input:
+            name_text = self.font.render(self.name_input, True, self.COLORS['text_primary'])
+        else:
+            # Placeholder text
+            name_text = self.font.render("Type your name here...", True, self.COLORS['text_disabled'])
+
+        name_rect = name_text.get_rect(center=name_box.center)
+        self.screen.blit(name_text, name_rect)
+
+        # Cursore solo se c'è del testo
+        if self.cursor_visible and self.name_input_active and self.name_input:
+            cursor_x = name_rect.right + 5
+            cursor_y = name_box.centery
+            pygame.draw.line(self.screen, self.COLORS['success'],
+                             (cursor_x, cursor_y - 15), (cursor_x, cursor_y + 15), 3)
+
+        current_y += 80
+
+        # Pulsante Join (più grande e centrato)
+        join_button = pygame.Rect(240, current_y, 200, 45)
+
+        # Determina se il pulsante è attivo
+        button_active = len(self.name_input.strip()) >= 2
+
+        if button_active:
+            # Pulsante attivo con animazione
+            pulse = abs(math.sin(self.animation_timer * 0.08)) * 15
+            button_color1 = (50 + pulse, 200 + pulse, 50 + pulse)
+            button_color2 = (30 + pulse, 150 + pulse, 30 + pulse)
+            border_color = (100, 255, 100)
+        else:
+            # Pulsante disattivato
+            button_color1 = self.COLORS['text_disabled']
+            button_color2 = (80, 80, 80)
+            border_color = self.COLORS['border']
+
+        # Ombra pulsante
+        shadow_button = join_button.copy()
+        shadow_button.x += 3
+        shadow_button.y += 3
+        self.draw_rounded_rect(self.screen, (10, 10, 15), shadow_button, radius=20)
+
+        # Pulsante
+        self.draw_gradient_rect(self.screen, button_color1, button_color2, join_button)
+        pygame.draw.rect(self.screen, border_color, join_button, 3, border_radius=20)
+
+        # Testo pulsante
+        join_text = self.title_font.render("JOIN LOBBY", True, self.COLORS['text_primary'])
+        join_rect = join_text.get_rect(center=join_button.center)
+        self.screen.blit(join_text, join_rect)
+
+        current_y += 70
+
+        # Istruzioni chiare
+        instructions = [
+            "• Type your name and press ENTER",
+            "• Or click JOIN LOBBY button",
+            "• Press ESC to exit"
+        ]
+
+        for instruction in instructions:
+            inst_text = self.small_font.render(instruction, True, self.COLORS['info'])
+            inst_rect = inst_text.get_rect(center=(self.screen.get_width() // 2, current_y))
+            self.screen.blit(inst_text, inst_rect)
+            current_y += 20
+
+        current_y += 20
+
+        # Messaggio di errore (solo se presente)
+        if self.join_error_message:
+            # Box errore
+            error_box = pygame.Rect(100, current_y, 480, 35)
+            pygame.draw.rect(self.screen, (60, 20, 20), error_box, border_radius=10)
+            pygame.draw.rect(self.screen, self.COLORS['danger'], error_box, 2, border_radius=10)
+
+            error_text = self.font.render(self.join_error_message, True, self.COLORS['danger'])
+            error_rect = error_text.get_rect(center=error_box.center)
+            self.screen.blit(error_text, error_rect)
+
+        pygame.display.flip()
+
+    def attempt_join_lobby(self):
+        """Tenta di entrare nella lobby con il nome specificato."""
+        self.player_name = self.name_input.strip()
+        if len(self.player_name) < 2:
+            self.show_error("Nome troppo corto (minimo 2 caratteri)")
+            return
+
+        try:
+            # Invia l'handshake di sessione prima della richiesta di join
+            self.send_session_handshake()
+            time.sleep(0.1)  # Breve pausa per assicurare l'ordine
+            self.send_join_request()
+            print(f"[CLIENT] Attempting to join with name: {self.player_name}")
+        except Exception as e:
+            self.show_error("Errore di connessione")
+            print(f"Error joining: {e}")
+
+    def handle_name_entry_input(self, event):
+        """Gestisce l'input nella schermata di inserimento nome."""
+        if self.name_input_active:
+            if event.key == pygame.K_RETURN:
+                # Prova a entrare con il nome inserito
+                if len(self.name_input.strip()) >= 2:
+                    self.attempt_join_lobby()
+                else:
+                    self.show_error("Nome troppo corto (minimo 2 caratteri)")
+            elif event.key == pygame.K_BACKSPACE:
+                self.name_input = self.name_input[:-1]
+            elif event.key == pygame.K_ESCAPE:
+                # Chiudi il gioco
+                pygame.quit()
+                exit()
+            else:
+                # Aggiungi carattere al nome (max 20 caratteri)
+                if event.unicode and len(self.name_input) < 20 and event.unicode.isprintable():
+                    self.name_input += event.unicode
+
+    def handle_game_input(self, event):
+        """Gestisce l'input durante il gioco (lobby, partita, vittoria)."""
+        # Gestione chat (sempre disponibile)
+        if event.key == pygame.K_t and not self.chat_active:
+            self.chat_active = True
+            self.chat_input = ""
+        elif self.chat_active:
+            if event.key == pygame.K_RETURN:
+                if self.chat_input.strip():
+                    self.send_command(f"CHAT:{self.chat_input}")
+                self.chat_input = ""
+                self.chat_active = False
+            elif event.key == pygame.K_ESCAPE:
+                self.chat_input = ""
+                self.chat_active = False
+            elif event.key == pygame.K_BACKSPACE:
+                self.chat_input = self.chat_input[:-1]
+            else:
+                if event.unicode and len(self.chat_input) < 45:
+                    self.chat_input += event.unicode
+        # Tasto X per uscire temporaneamente (solo per giocatori in lobby)
+        elif (event.key == pygame.K_x and
+              self.current_screen == "lobby" and
+              not self.is_spectator and
+              not self.chat_active):
+            self.send_command("LEAVE_TEMPORARILY")
+            self.return_to_name_entry()
+        # Altri comandi del gioco
+        elif not self.chat_active:
+            if self.current_screen == "lobby":
+                self.handle_lobby_input(event)
+            elif self.current_screen == "game":
+                self.handle_game_play_input(event)
+            elif self.current_screen == "victory":
+                self.handle_victory_input(event)
+
+    def handle_lobby_input(self, event):
+        """Gestisce input specifici della lobby."""
+        if self.is_spectator:
+            if event.key == pygame.K_j:
+                connected_count = sum(1 for p in self.state["players"].values()
+                                      if not p.get("disconnected", False))
+                if connected_count < 4:
+                    self.send_command("JOIN_GAME")
+        else:
+            current_host = self.state.get("current_host_id", 0)
+            if event.key == pygame.K_RETURN and self.player_id == current_host:
+                if self.state.get("can_start", False):
+                    self.send_command("START_GAME")
+
+    def handle_game_play_input(self, event):
+        """Gestisce input durante la partita."""
+        if not self.is_spectator and self.state.get("game_state") == "playing":
+            if event.key == pygame.K_UP:
+                self.send_command("UP")
+            elif event.key == pygame.K_DOWN:
+                self.send_command("DOWN")
+            elif event.key == pygame.K_LEFT:
+                self.send_command("LEFT")
+            elif event.key == pygame.K_RIGHT:
+                self.send_command("RIGHT")
+            elif event.key == pygame.K_SPACE:
+                self.send_command("BOMB")
+
+    def handle_victory_input(self, event):
+        """Gestisce input nella schermata vittoria."""
+        if not self.is_spectator and event.key == pygame.K_RETURN:
+            self.send_command("PLAY_AGAIN")
+
+    def show_error(self, message):
+        """Mostra un messaggio di errore temporaneo."""
+        self.join_error_message = message
+        self.error_timer = 90  # 3 secondi a 30 FPS
+
+    def return_to_name_entry(self):
+        """Torna alla schermata di inserimento nome."""
+        self.current_screen = "name_entry"
+        self.name_input = self.player_name or ""
+        self.name_input_active = True
+        self.join_error_message = ""
+        self.state = None
+
+    def handle_mouse_click(self, pos):
+        """Gestisce i click del mouse."""
+        mouse_x, mouse_y = pos
+
+        if self.current_screen == "lobby" and not self.is_spectator:
+            # Pulsante X per uscire (coordinate aggiornate)
+            exit_button = pygame.Rect(330, 110, 25, 25)
+            if exit_button.collidepoint(mouse_x, mouse_y):
+                print("[CLICK] Exit button clicked")
+                self.send_command("LEAVE_TEMPORARILY")
+                self.return_to_name_entry()
+
+        elif self.current_screen == "name_entry":
+            # Pulsante JOIN LOBBY
+            join_button = pygame.Rect(240, 320, 200, 45)
+            if join_button.collidepoint(mouse_x, mouse_y) and len(self.name_input.strip()) >= 2:
+                print("[CLICK] Join button clicked")
+                self.attempt_join_lobby()
+
+            # Click nell'area di input nome per attivarlo
+            name_box = pygame.Rect(150, 240, 380, 50)
+            if name_box.collidepoint(mouse_x, mouse_y):
+                self.name_input_active = True
