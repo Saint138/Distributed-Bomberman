@@ -11,6 +11,10 @@ TILE_BLOCK = 2
 TILE_BOMB  = 3
 TILE_FIRE  = 4  
 
+GAME_STATE_LOBBY = "lobby"
+GAME_STATE_PLAYING = "playing"
+GAME_STATE_VICTORY = "victory"
+
 BOMB_TIMER_TICKS     = 20   
 EXPLOSION_RANGE      = 2
 EXPLOSION_TTL_TICKS  = 5
@@ -32,6 +36,10 @@ class GameState:
         self.spectators = {}
         self.chat_messages = []
         self.next_spectator_id = 100
+        self.game_state = GAME_STATE_LOBBY
+        self.winner_id = None
+        self.victory_timer = 0
+
         
 
     # ---------------- Map/Spawn ----------------
@@ -63,7 +71,29 @@ class GameState:
             "disconnected": False, "disconnect_time": None,
             "disconnect_time_left": 0
         }
+    def start_game(self):
+        if self.game_state != GAME_STATE_LOBBY: return False
+        if sum(1 for p in self.players.values() if not p.get("disconnected", False)) < 2:
+            return False
+        self.game_state = GAME_STATE_PLAYING
+        self.map = self._generate_map()
+        # reset posizioni/ vite
+        spawn = [(1,1),(1,MAP_HEIGHT-2),(MAP_WIDTH-2,1),(MAP_WIDTH-2,MAP_HEIGHT-2)]
+        for pid, pd in self.players.items():
+            if pid < len(spawn) and not pd.get("disconnected", False):
+                pd["x"], pd["y"] = spawn[pid]
+                pd["alive"], pd["lives"] = True, 3
+        return True
 
+    def return_to_lobby(self):
+        self.game_state = GAME_STATE_LOBBY
+        self.map, self.bombs, self.explosions = None, [], []
+        self.winner_id, self.victory_timer = None, 0
+        for pd in self.players.values():
+            if not pd.get("disconnected", False):
+                pd["alive"], pd["lives"] = True, 3
+
+    # ---------------- Spectator/player Management ----------------
     def add_spectator(self):
         sid = self.next_spectator_id; self.next_spectator_id += 1
         self.spectators[sid] = {"connected": True, "join_time": time.time()}
@@ -241,5 +271,7 @@ class GameState:
             "explosions": self.explosions,
             "spectators": self.spectators,  # opzionale se il client lo usa
             "chat_messages": self.chat_messages,
-
+            "game_state": self.game_state,
+            "winner_id": self.winner_id,
+            "victory_timer": self.victory_timer,
         }
