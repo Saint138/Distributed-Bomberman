@@ -17,6 +17,9 @@ EXPLOSION_TTL_TICKS  = 5
 RECONNECT_TIMEOUT_S  = 20
 MAX_BOMBS_PER_PLAYER = 1    
 
+MAX_CHAT_MESSAGES = 10
+MAX_MESSAGE_LENGTH = 50
+
 class GameState:
     def __init__(self):
         self.map = self._generate_map()
@@ -24,6 +27,10 @@ class GameState:
         self.bombs = []        
         self.explosions = []   
         self.client_player_mapping = {}
+        self.spectators = {}
+        self.chat_messages = []
+        self.next_spectator_id = 100
+        
 
     # ---------------- Map/Spawn ----------------
 
@@ -54,6 +61,31 @@ class GameState:
             "disconnected": False, "disconnect_time": None,
             "disconnect_time_left": 0
         }
+
+    def add_spectator(self):
+        sid = self.next_spectator_id; self.next_spectator_id += 1
+        self.spectators[sid] = {"connected": True, "join_time": time.time()}
+        self.add_chat_message(-1, f"Spectator {sid} joined", is_system=True)
+        return sid
+
+    def remove_spectator(self, sid):
+        if sid in self.spectators:
+            del self.spectators[sid]
+            self.add_chat_message(-1, f"Spectator {sid} left", is_system=True)
+
+    def add_chat_message(self, sender_id, message, is_system=False):
+        message = message[:MAX_MESSAGE_LENGTH]
+        is_spectator = (sender_id >= 100) if not is_system else False
+        self.chat_messages.append({
+            "player_id": sender_id,
+            "message": message,
+            "timestamp": time.time(),
+            "is_system": is_system,
+            "is_spectator": is_spectator
+        })
+        if len(self.chat_messages) > MAX_CHAT_MESSAGES:
+            self.chat_messages = self.chat_messages[-MAX_CHAT_MESSAGES:]
+
 
 
     # ---------------- Movement ----------------
@@ -148,5 +180,8 @@ class GameState:
             "map": self.map,
             "players": self.players,
             "bombs": self.bombs,
-            "explosions": self.explosions
+            "explosions": self.explosions,
+            "spectators": self.spectators,  # opzionale se il client lo usa
+            "chat_messages": self.chat_messages,
+
         }

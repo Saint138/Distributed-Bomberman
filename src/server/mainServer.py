@@ -6,6 +6,7 @@ from server.network import handle_client
 from server.game_logic import GameState
 
 clients = []
+spectator_clients = []
 MAX_PLAYERS = 4
 game = GameState()
 player_id_counter = 0
@@ -34,6 +35,12 @@ def game_loop():
                     clients.remove(c)
                 except ValueError:
                     pass
+        for s in list(spectator_clients):
+            try:
+                s.sendall(state.encode())
+            except Exception:
+                try: spectator_clients.remove(s)
+                except ValueError: pass
         time.sleep(0.1)
 
 def start_server():
@@ -70,20 +77,25 @@ def start_server():
 
         # per ora: sempre player “nuovo”
         free_slot = get_free_player_slot()
-        if free_slot is None:
-            # temporaneamente rifiutiamo se pieno (nel prossimo step aggiungiamo spettatori)
-            print(f"[SERVER] Lobby piena, rifiuto {addr}")
-            conn.close(); continue
-
-        player_slots[free_slot] = True
-        game.add_player(free_slot)
-        clients.append(conn)
-        threading.Thread(
-            target=handle_client,
-            args=(conn, addr, clients, game, free_slot, False, player_slots, handshake_data),
-            daemon=True
-        ).start()
-        print(f"[PLAYER] {addr} -> Player {free_slot}")
+        if free_slot is not None:
+                # Slot disponibile - FIXED: add_player prende solo player_id
+                player_slots[free_slot] = True
+                game.add_player(free_slot)  # Rimosso client_id qui
+                game.players[free_slot]["original_client_id"] = client_id  # Aggiunto manualmente
+                game.register_client_player(client_id, free_slot)
+                clients.append(conn)
+                threading.Thread(target=handle_client, args=(
+                    conn, addr, clients, game, free_slot, False, player_slots, handshake_data
+                )).start()
+                print(f"[PLAYER] {addr} joined as Player {free_slot}")
+        else:
+            # Tutti gli slot occupati
+            spectator_id = game.add_spectator()
+            spectator_clients.append(conn)
+            threading.Thread(target=handle_client, args=(
+                conn, addr, spectator_clients, game, spectator_id, True, None, handshake_data
+            )).start()
+            print(f"[SPECTATOR] {addr} joined as Spectator {spectator_id} (lobby full)")
 
 
 
