@@ -24,8 +24,15 @@ def get_free_player_slot():
     return None
 
 def game_loop():
+    cleanup_counter = 0
     while True:
         game.tick()
+
+        cleanup_counter += 1
+        if cleanup_counter >= 50:
+            game.cleanup_client_mappings()
+            cleanup_counter = 0
+
         state = json.dumps(game.get_state()) + "\n"
         for c in list(clients):
             try:
@@ -69,6 +76,26 @@ def start_server():
                 conn.close(); continue
             client_id = hs["client_id"]
             print(f"[HANDSHAKE] Client {client_id} from {addr}")
+
+            # tentativo riconnessione
+            rec_pid, _ = game.handle_client_handshake(client_id)
+            if rec_pid is not None:
+                if (rec_pid in game.players and
+                    game.players[rec_pid].get("disconnected", False) and
+                    game.players[rec_pid].get("disconnect_time_left", 0) > 0 and
+                    not game.players[rec_pid].get("already_reconnected", False)):
+                    player_slots[rec_pid] = True
+                    clients.append(conn)
+                    threading.Thread(
+                        target=handle_client,
+                        args=(conn, addr, clients, game, rec_pid, False, player_slots, handshake_data),
+                        daemon=True
+                    ).start()
+                    print(f"[RECONNECTED] {addr} -> Player {rec_pid}")
+                    continue
+                else:
+                    print(f"[FAILED] Reconnection failed for client {client_id}")
+
         except Exception as e:
             print(f"[ERROR] Handshake read error from {addr}: {e}")
             try: conn.close()

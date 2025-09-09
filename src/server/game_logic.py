@@ -17,6 +17,8 @@ EXPLOSION_TTL_TICKS  = 5
 RECONNECT_TIMEOUT_S  = 20
 MAX_BOMBS_PER_PLAYER = 1    
 
+DISCONNECT_TIMEOUT = 20 
+
 MAX_CHAT_MESSAGES = 10
 MAX_MESSAGE_LENGTH = 50
 
@@ -86,6 +88,56 @@ class GameState:
         if len(self.chat_messages) > MAX_CHAT_MESSAGES:
             self.chat_messages = self.chat_messages[-MAX_CHAT_MESSAGES:]
 
+    def handle_client_handshake(self, client_id):
+        if client_id in self.client_player_mapping:
+            pid = self.client_player_mapping[client_id]
+            if pid not in self.players:
+                del self.client_player_mapping[client_id]
+                return None, None
+            pd = self.players[pid]
+            if (pd.get("disconnected", False) and
+                pd.get("disconnect_time_left", 0) > 0 and
+                not pd.get("already_reconnected", False) and
+                pd.get("original_client_id") == client_id):
+                return pid, False
+            # mapping obsoleta
+            del self.client_player_mapping[client_id]
+        return None, None
+
+    def register_client_player(self, client_id, player_id):
+        self.client_player_mapping[client_id] = player_id
+
+    def handle_player_disconnect(self, player_id):
+        if player_id not in self.players: return
+        pd = self.players[player_id]
+        pd["was_alive_before_disconnect"] = pd.get("alive", False)
+        pd["alive"] = False
+        pd["disconnected"] = True
+        pd["disconnect_time"] = time.time()
+        pd["disconnect_time_left"] = DISCONNECT_TIMEOUT
+        pd["already_reconnected"] = False
+
+    def reconnect_player(self, player_id, client_id):
+        if player_id not in self.players: return False
+        pd = self.players[player_id]
+        if (not pd.get("disconnected", False) or
+            pd.get("disconnect_time_left", 0) <= 0 or
+            pd.get("already_reconnected", False)):
+            return False
+        if pd.get("original_client_id") != client_id:
+            return False
+        pd["disconnected"] = False
+        pd["disconnect_time"] = None
+        pd["disconnect_time_left"] = 0
+        pd["already_reconnected"] = True
+        if pd.get("was_alive_before_disconnect", True):
+            pd["alive"] = True
+        return True
+
+    def cleanup_client_mappings(self):
+        stale = [cid for cid, pid in self.client_player_mapping.items() if pid not in self.players]
+        for cid in stale:
+            del self.client_player_mapping[cid]
 
 
     # ---------------- Movement ----------------
@@ -167,11 +219,17 @@ class GameState:
                 self.explosions.remove(exp)
 
         now = time.time()
-        for pid in list(self.players):
-            pdata = self.players[pid]
-            if pdata.get("disconnected") and pdata.get("disconnect_time") and now - pdata["disconnect_time"] > RECONNECT_TIMEOUT_S:
-                print(f"[TIMEOUT] Player {pid} removed from game")
-                del self.players[pid]
+        to_remove = []
+        for pid, pd in self.players.items():
+            if pd.get("disconnected", False) and pd.get("disconnect_time"):
+                left = DISCONNECT_TIMEOUT - (now - pd["disconnect_time"])
+                if left <= 0:
+                    to_remove.append(pid)
+                else:
+                    pd["disconnect_time_left"] = int(left)
+        for pid in to_remove:
+            del self.players[pid]
+
 
     # ---------------- Serialization ----------------
 
