@@ -1,4 +1,5 @@
 import json
+from .models import GAME_STATE_LOBBY, GAME_STATE_PLAYING, GAME_STATE_VICTORY
 
 def handle_client(conn, addr, clients, game, user_id, is_spectator=False, player_slots=None, player_name="", client_id=""):
     """
@@ -34,7 +35,7 @@ def handle_client(conn, addr, clients, game, user_id, is_spectator=False, player
                     if chat.strip():
                         game.add_chat_message(user_id, chat)
                 elif msgU == "JOIN_GAME":
-                    if game.s.game_state == game.S.GAME_STATE_LOBBY:
+                    if game.s.game_state == GAME_STATE_LOBBY:
                         spec_name = player_name or f"Spectator {user_id}"
                         new_pid = game.convert_spectator_to_player(user_id, spec_name)
                         if new_pid >= 0:
@@ -58,12 +59,12 @@ def handle_client(conn, addr, clients, game, user_id, is_spectator=False, player
                 game.place_bomb(user_id)
                 continue
             if msgU == "START_GAME":
-                if game.s.game_state == game.S.GAME_STATE_LOBBY and user_id == game.get_current_host():
+                if game.s.game_state == GAME_STATE_LOBBY and user_id == game.get_current_host():
                     if game.start_game():
                         print(f"[GAME] Player {user_id} ({display_name}) started the game")
                 continue
             if msgU == "PLAY_AGAIN":
-                if game.s.game_state == game.S.GAME_STATE_VICTORY:
+                if game.s.game_state == GAME_STATE_VICTORY:
                     game.return_to_lobby()
                 continue
             if msgU == "LEAVE_TEMPORARILY":
@@ -90,15 +91,18 @@ def handle_client(conn, addr, clients, game, user_id, is_spectator=False, player
             except ValueError: pass
 
         if is_spectator or user_type == "Spectator" or (is_spectator and isinstance(user_id, int) and user_id >= 100):
-            try: game.remove_spectator(user_id)
-            except Exception as e: print(f"[HANDLER] spectator remove error: {e}")
+            try:
+                game.remove_spectator(user_id)
+            except Exception as e:
+                print(f"[HANDLER] spectator remove error: {e}")
         else:
             try:
                 if player_slots is not None and isinstance(user_id, int) and 0 <= user_id < 4:
                     player_slots[user_id] = False
-                # Non chiamare handle_player_disconnect se è un'uscita temporanea già gestita
-                if not (hasattr(game.s.players.get(user_id, {}), 'temporarily_away') and
-                        game.s.players[user_id].temporarily_away):
-                    game.handle_player_disconnect(user_id, temporarily_away=False)
+                # Solo disconnetti se non è già stata gestita l'uscita temporanea
+                if user_id in game.s.players:
+                    player = game.s.players[user_id]
+                    if not (hasattr(player, 'temporarily_away') and player.temporarily_away):
+                        game.handle_player_disconnect(user_id, temporarily_away=False)
             except Exception as e:
                 print(f"[HANDLER] player disconnect error: {e}")

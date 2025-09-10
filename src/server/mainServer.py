@@ -145,7 +145,7 @@ def start_server(host="localhost", port=5555):
             continue
 
         # 4) Determina se assegnare come player o spectator
-        if game.s.game_state == game.S.GAME_STATE_PLAYING:
+        if game.s.game_state == "playing":
             # Partita in corso -> spettatore
             spectator_id = game.add_spectator(player_name)
             spectator_clients.append(conn)

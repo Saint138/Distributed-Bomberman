@@ -59,15 +59,16 @@ class GameServer:
             "join_time": self.s.now(),
             "name": name or f"Spectator {sid}"
         }
-        print(f"[SPECTATOR] Spectator {sid} ({name}) joined")
+        print(f"[SPECTATOR] Spectator {sid} ({name or f'Spectator {sid}'}) joined")
         self.add_chat_message(-1, f"{name or f'Spectator {sid}'} joined as spectator", is_system=True)
         return sid
 
     def remove_spectator(self, sid: int) -> None:
         if sid in self.s.spectators:
+            name = self.s.spectators[sid].get("name", f"Spectator {sid}")
             del self.s.spectators[sid]
-            print(f"[SPECTATOR] Spectator {sid} left")
-            self.add_chat_message(-1, f"Spectator {sid} left", is_system=True)
+            print(f"[SPECTATOR] Spectator {sid} ({name}) left")
+            self.add_chat_message(-1, f"{name} left", is_system=True)
 
     def convert_spectator_to_player(self, spectator_id: int, spectator_name: str = "") -> int:
         if spectator_id not in self.s.spectators:
@@ -156,13 +157,18 @@ class GameServer:
         if not p: return False
         if (not p.disconnected) or p.disconnect_time_left <= 0 or p.already_reconnected: return False
         if p.original_client_id != client_id: return False
+
         p.disconnected = False
         p.disconnect_time = None
         p.disconnect_time_left = 0
         p.already_reconnected = True
+        p.temporarily_away = False
+
         if self.s.game_state == GAME_STATE_PLAYING and p.was_alive_before_disconnect:
             p.alive = True
-        self.add_chat_message(-1, f"Player {player_id} reconnected!", is_system=True)
+
+        player_name = p.name or f"Player {player_id}"
+        self.add_chat_message(-1, f"{player_name} reconnected!", is_system=True)
         return True
 
     # ---------- Chat ----------
@@ -194,13 +200,15 @@ class GameServer:
                     to_remove.append(pid)
                 else:
                     p.disconnect_time_left = int(left)
+
         for pid in to_remove:
+            player_name = self.s.players[pid].name if pid in self.s.players else f"Player {pid}"
             stale = [cid for cid, mapped in list(self.s.client_player_mapping.items()) if mapped == pid]
             for cid in stale:
                 del self.s.client_player_mapping[cid]
             del self.s.players[pid]
-            print(f"[TIMEOUT] Player {pid} removed from game")
-            self.add_chat_message(-1, f"Player {pid} left the lobby", is_system=True)
+            print(f"[TIMEOUT] {player_name} removed from game")
+            self.add_chat_message(-1, f"{player_name} left the lobby", is_system=True)
 
         if self.s.game_state != GAME_STATE_PLAYING:
             return
@@ -223,7 +231,8 @@ class GameServer:
             if self.s.winner_id == -1:
                 self.add_chat_message(-1, "Draw - no winners!", is_system=True)
             else:
-                self.add_chat_message(-1, f"Player {self.s.winner_id} wins the game!", is_system=True)
+                winner_name = self.s.players[self.s.winner_id].name if self.s.winner_id in self.s.players else f"Player {self.s.winner_id}"
+                self.add_chat_message(-1, f"{winner_name} wins the game!", is_system=True)
             return
 
         # rigenerazione blocchi
@@ -231,6 +240,10 @@ class GameServer:
         if self.s.block_regen_timer <= 0:
             try_regen_block(self.s)
             self.s.block_regen_timer = random.randint(BLOCK_REGEN_MIN_TIME, BLOCK_REGEN_MAX_TIME)
+
+    # ---------- Victory check wrapper ----------
+    def check_victory(self) -> bool:
+        return core_check_victory(self.s)
 
     # ---------- Stato ----------
     def get_state(self) -> Dict[str, Any]:
@@ -256,6 +269,3 @@ class GameServer:
                 "victory_timer": self.s.victory_timer
             })
         return base
-
-    def check_victory(self) -> bool:
-        return core_check_victory(self.s)
