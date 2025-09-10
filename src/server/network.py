@@ -3,7 +3,7 @@ from .models import GAME_STATE_LOBBY, GAME_STATE_PLAYING, GAME_STATE_VICTORY
 
 def handle_client(conn, addr, clients, game, user_id, is_spectator=False, player_slots=None, player_name="", client_id=""):
     """
-    Controller socket: traduce i messaggi testuali in chiamate al GameServer.
+    Controller socket semplificato: traduce i messaggi testuali in chiamate al GameServer.
     """
     user_type = "Spectator" if is_spectator else "Player"
     display_name = player_name or f"{user_type} {user_id}"
@@ -67,11 +67,6 @@ def handle_client(conn, addr, clients, game, user_id, is_spectator=False, player
                 if game.s.game_state == GAME_STATE_VICTORY:
                     game.return_to_lobby()
                 continue
-            if msgU == "LEAVE_TEMPORARILY":
-                # Disconnessione temporanea
-                print(f"[TEMP LEAVE] Player {user_id} ({display_name}) leaving temporarily")
-                game.handle_player_disconnect(user_id, temporarily_away=True)
-                break
             if message.startswith("CHAT:"):
                 chat = message[5:]
                 if chat.strip():
@@ -97,12 +92,12 @@ def handle_client(conn, addr, clients, game, user_id, is_spectator=False, player
                 print(f"[HANDLER] spectator remove error: {e}")
         else:
             try:
+                # Libera sempre lo slot quando un player si disconnette
                 if player_slots is not None and isinstance(user_id, int) and 0 <= user_id < 4:
                     player_slots[user_id] = False
-                # Solo disconnetti se non è già stata gestita l'uscita temporanea
-                if user_id in game.s.players:
-                    player = game.s.players[user_id]
-                    if not (hasattr(player, 'temporarily_away') and player.temporarily_away):
-                        game.handle_player_disconnect(user_id, temporarily_away=False)
+
+                # Gestisce la disconnessione del player
+                game.handle_player_disconnect(user_id)
+
             except Exception as e:
                 print(f"[HANDLER] player disconnect error: {e}")

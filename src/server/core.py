@@ -84,11 +84,28 @@ def return_to_lobby(s: State):
     s.winner_id = None
     s.victory_timer = 0
     s.block_regen_timer = BLOCK_REGEN_MIN_TIME
-    for p in s.players.values():
-        if not p.disconnected:
+
+    # Rimuovi giocatori disconnessi quando si torna in lobby
+    disconnected_players = []
+    for pid, p in list(s.players.items()):
+        if p.disconnected:
+            disconnected_players.append(pid)
+            print(f"[CLEANUP] Removing disconnected player {pid} ({p.name}) from lobby")
+        else:
+            # Reset stato per giocatori connessi
             p.ready = False
             p.alive = True
             p.lives = 3
+
+    # Rimuovi i giocatori disconnessi
+    for pid in disconnected_players:
+        if pid in s.players:
+            del s.players[pid]
+
+    # Ripulisci anche i client mapping per i giocatori rimossi
+    stale_mappings = [cid for cid, pid in list(s.client_player_mapping.items()) if pid in disconnected_players]
+    for cid in stale_mappings:
+        del s.client_player_mapping[cid]
 
 # ---------- Map / Collisions ----------
 def generate_map():

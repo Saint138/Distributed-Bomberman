@@ -38,13 +38,8 @@ class BombermanClient:
         self.sock = sock
         self.player_id = None
         self.is_spectator = False
-        self.session_id = self.generate_session_id()
         self.player_name = None
-        self.current_screen = "name_entry"
-        self.name_input = ""
-        self.name_input_active = True
-        self.join_error_message = ""
-        self.error_timer = 0
+        self.current_screen = "connecting"
 
         self.map_width_px = 15 * TILE_SIZE
         self.map_height_px = 13 * TILE_SIZE
@@ -69,6 +64,7 @@ class BombermanClient:
 
         # Animazioni
         self.animation_timer = 0
+        self.connection_timer = 0
 
         # Colori migliorati
         self.COLORS = {
@@ -86,21 +82,16 @@ class BombermanClient:
             'info': (100, 200, 255)
         }
 
+        # Avvia immediatamente la connessione
+        self.connect_to_server()
         threading.Thread(target=self.receive_state, daemon=True).start()
 
-    def generate_session_id(self):
-        """Genera un ID di sessione semplice."""
+    def connect_to_server(self):
+        """Invia una richiesta di connessione semplificata al server."""
         try:
-            pid = os.getpid()
-            timestamp = time.time()
-            hostname = platform.node()
-            session_data = f"{pid}_{timestamp}_{hostname}_{random.randint(1000, 9999)}"
-            session_id = hashlib.sha256(session_data.encode()).hexdigest()[:16]
-            print(f"[SESSION] Generated session ID: {session_id}")
-            return session_id
+            print("[CLIENT] Connecting to server...")
         except Exception as e:
-            print(f"[SESSION] Error: {e}, using UUID")
-            return str(uuid.uuid4())[:16]
+            print(f"[CLIENT] Connection error: {e}")
 
     def draw_gradient_rect(self, surface, color1, color2, rect, vertical=True):
         """Disegna un rettangolo con gradiente."""
@@ -150,42 +141,20 @@ class BombermanClient:
 
                     response = json.loads(line)
 
-                    # Gestisce errori di join
-                    if "error" in response:
-                        error_type = response["error"]
-                        details = response.get("details", "")
-
-                        if error_type == "name_taken":
-                            if details:
-                                self.show_error(f"Nome già in uso: {details}")
-                            else:
-                                self.show_error("Nome già in uso!")
-                        elif error_type == "name_too_short":
-                            self.show_error("Nome troppo corto!")
-                        elif error_type == "invalid_request":
-                            self.show_error("Richiesta non valida!")
-                        elif error_type == "session_mismatch":
-                            self.show_error("Errore sessione!")
-                        elif error_type == "server_error":
-                            self.show_error("Errore del server!")
-                        else:
-                            self.show_error("Errore sconosciuto!")
-                        continue
-
                     # Gestisce risposta di join con successo
                     if "join_success" in response and response["join_success"]:
                         self.player_id = response["player_id"]
                         self.is_spectator = response.get("is_spectator", False)
                         self.player_name = response.get("player_name", "")
                         self.current_screen = "lobby"
-                        print(f"Successfully joined as {self.player_name}")
+                        print(f"[CLIENT] Successfully joined as {self.player_name}")
                         continue
 
                     # Controlla se è una conversione da spettatore a giocatore
                     if "conversion_success" in response and response["conversion_success"]:
                         self.player_id = response["new_player_id"]
                         self.is_spectator = False
-                        print(f"Converted to Player {self.player_id}")
+                        print(f"[CLIENT] Converted to Player {self.player_id}")
                     else:
                         # Stato normale del gioco
                         self.state = response
@@ -211,18 +180,16 @@ class BombermanClient:
                 self.cursor_visible = not self.cursor_visible
                 self.cursor_timer = 0
 
-            # Aggiorna timer errori
-            if self.error_timer > 0:
-                self.error_timer -= 1
-                if self.error_timer <= 0:
-                    self.join_error_message = ""
+            # Aggiorna timer di connessione
+            self.connection_timer += 1
 
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.KEYDOWN:
-                    if self.current_screen == "name_entry":
-                        self.handle_name_entry_input(event)
+                    if self.current_screen == "connecting":
+                        if event.key == pygame.K_ESCAPE:
+                            running = False
                     elif self.current_screen in ["lobby", "game", "victory"]:
                         self.handle_game_input(event)
                 elif event.type == pygame.MOUSEBUTTONDOWN:
@@ -230,8 +197,8 @@ class BombermanClient:
                         self.handle_mouse_click(event.pos)
 
             # Renderizza la schermata appropriata
-            if self.current_screen == "name_entry":
-                self.draw_name_entry()
+            if self.current_screen == "connecting":
+                self.draw_connecting()
             elif self.state:
                 if self.state.get("game_state") == "lobby":
                     self.current_screen = "lobby"
@@ -245,8 +212,8 @@ class BombermanClient:
 
         pygame.quit()
 
-    def draw_name_entry(self):
-        """Disegna la schermata di inserimento nome e spiegazione del gioco."""
+    def draw_connecting(self):
+        """Disegna la schermata di connessione."""
         # Sfondo gradiente
         self.draw_gradient_rect(self.screen, (20, 20, 30), (40, 40, 60),
                                 (0, 0, self.screen.get_width(), self.screen.get_height()))
@@ -257,149 +224,39 @@ class BombermanClient:
         # Titolo principale
         title_text = "BOMBERMAN"
         title = self.big_font.render(title_text, True, self.COLORS['text_primary'])
-        title_rect = title.get_rect(center=(self.screen.get_width() // 2, 40))
+        title_rect = title.get_rect(center=(self.screen.get_width() // 2, 150))
         self.screen.blit(title, title_rect)
 
-        # Welcome subtitle
-        welcome_text = "Welcome to Bomberman!"
-        welcome = self.font.render(welcome_text, True, self.COLORS['warning'])
-        welcome_rect = welcome.get_rect(center=(self.screen.get_width() // 2, 75))
-        self.screen.blit(welcome, welcome_rect)
+        # Messaggio di connessione animato
+        dots = "." * ((self.connection_timer // 30) % 4)
+        connecting_text = f"Connecting to server{dots}"
+        connecting = self.font.render(connecting_text, True, self.COLORS['warning'])
+        connecting_rect = connecting.get_rect(center=(self.screen.get_width() // 2, 220))
+        self.screen.blit(connecting, connecting_rect)
 
-        # Spiegazione del gioco con spaziatura corretta
-        current_y = 110
+        # Spinner di caricamento
+        spinner_center = (self.screen.get_width() // 2, 280)
+        spinner_radius = 20
+        spinner_angle = (self.connection_timer * 5) % 360
 
-        # HOW TO PLAY section
-        how_to_play_title = self.font.render("HOW TO PLAY:", True, self.COLORS['warning'])
-        how_to_play_rect = how_to_play_title.get_rect(center=(self.screen.get_width() // 2, current_y))
-        self.screen.blit(how_to_play_title, how_to_play_rect)
-        current_y += 30
+        for i in range(8):
+            angle = spinner_angle + i * 45
+            end_x = spinner_center[0] + math.cos(math.radians(angle)) * spinner_radius
+            end_y = spinner_center[1] + math.sin(math.radians(angle)) * spinner_radius
+            alpha = 255 - (i * 30)
+            color = (alpha, alpha, alpha)
+            pygame.draw.circle(self.screen, color, (int(end_x), int(end_y)), 3)
 
-        game_rules = [
-            "• Move with arrow keys",
-            "• Place bombs with SPACEBAR",
-            "• Destroy blocks and eliminate opponents",
-            "• Last player standing wins!"
-        ]
-
-        for rule in game_rules:
-            rule_text = self.small_font.render(rule, True, self.COLORS['text_secondary'])
-            rule_rect = rule_text.get_rect(center=(self.screen.get_width() // 2, current_y))
-            self.screen.blit(rule_text, rule_rect)
-            current_y += 20
-
-        current_y += 20  # Spazio extra tra sezioni
-
-        # === SEZIONE NOME ===
-        # Box per inserimento nome con bordo evidenziato
-        name_box = pygame.Rect(150, current_y, 380, 50)
-
-        # Ombra del box
-        shadow_box = name_box.copy()
-        shadow_box.x += 3
-        shadow_box.y += 3
-        self.draw_rounded_rect(self.screen, (10, 10, 15), shadow_box, radius=15)
-
-        # Box principale con gradiente
-        self.draw_gradient_rect(self.screen, self.COLORS['bg_light'], self.COLORS['bg_medium'], name_box)
-
-        # Bordo animato se attivo
-        if self.name_input_active:
-            pulse = abs(math.sin(self.animation_timer * 0.05)) * 20
-            border_color = (100 + pulse, 200 + pulse, 100 + pulse)
-            pygame.draw.rect(self.screen, border_color, name_box, 3, border_radius=15)
-        else:
-            pygame.draw.rect(self.screen, self.COLORS['border'], name_box, 2, border_radius=15)
-
-        # Label per inserimento nome (sopra il box)
-        label = self.font.render("Enter your name (2-20 characters):", True, self.COLORS['text_primary'])
-        label_rect = label.get_rect(center=(self.screen.get_width() // 2, current_y - 25))
-        self.screen.blit(label, label_rect)
-
-        # Input nome centrato nel box
-        if self.name_input:
-            name_text = self.font.render(self.name_input, True, self.COLORS['text_primary'])
-        else:
-            # Placeholder text
-            name_text = self.font.render("Type your name here...", True, self.COLORS['text_disabled'])
-
-        name_rect = name_text.get_rect(center=name_box.center)
-        self.screen.blit(name_text, name_rect)
-
-        # Cursore solo se c'è del testo
-        if self.cursor_visible and self.name_input_active and self.name_input:
-            cursor_x = name_rect.right + 5
-            cursor_y = name_box.centery
-            pygame.draw.line(self.screen, self.COLORS['success'],
-                             (cursor_x, cursor_y - 15), (cursor_x, cursor_y + 15), 3)
-
-        current_y += 80
-
-        # Pulsante Join (più grande e centrato)
-        join_button = pygame.Rect(240, current_y, 200, 45)
-
-        # Determina se il pulsante è attivo
-        button_active = len(self.name_input.strip()) >= 2
-
-        if button_active:
-            # Pulsante attivo con animazione
-            pulse = abs(math.sin(self.animation_timer * 0.08)) * 15
-            button_color1 = (50 + pulse, 200 + pulse, 50 + pulse)
-            button_color2 = (30 + pulse, 150 + pulse, 30 + pulse)
-            border_color = (100, 255, 100)
-        else:
-            # Pulsante disattivato
-            button_color1 = self.COLORS['text_disabled']
-            button_color2 = (80, 80, 80)
-            border_color = self.COLORS['border']
-
-        # Ombra pulsante
-        shadow_button = join_button.copy()
-        shadow_button.x += 3
-        shadow_button.y += 3
-        self.draw_rounded_rect(self.screen, (10, 10, 15), shadow_button, radius=20)
-
-        # Pulsante
-        self.draw_gradient_rect(self.screen, button_color1, button_color2, join_button)
-        pygame.draw.rect(self.screen, border_color, join_button, 3, border_radius=20)
-
-        # Testo pulsante
-        join_text = self.title_font.render("JOIN LOBBY", True, self.COLORS['text_primary'])
-        join_rect = join_text.get_rect(center=join_button.center)
-        self.screen.blit(join_text, join_rect)
-
-        current_y += 70
-
-        # Istruzioni chiare
-        instructions = [
-            "• Type your name and press ENTER",
-            "• Or click JOIN LOBBY button",
-            "• Press ESC to exit"
-        ]
-
-        for instruction in instructions:
-            inst_text = self.small_font.render(instruction, True, self.COLORS['info'])
-            inst_rect = inst_text.get_rect(center=(self.screen.get_width() // 2, current_y))
-            self.screen.blit(inst_text, inst_rect)
-            current_y += 20
-
-        current_y += 20
-
-        # Messaggio di errore (solo se presente)
-        if self.join_error_message:
-            # Box errore
-            error_box = pygame.Rect(100, current_y, 480, 35)
-            pygame.draw.rect(self.screen, (60, 20, 20), error_box, border_radius=10)
-            pygame.draw.rect(self.screen, self.COLORS['danger'], error_box, 2, border_radius=10)
-
-            error_text = self.font.render(self.join_error_message, True, self.COLORS['danger'])
-            error_rect = error_text.get_rect(center=error_box.center)
-            self.screen.blit(error_text, error_rect)
+        # Istruzioni
+        instruction_text = "Press ESC to exit"
+        instruction = self.small_font.render(instruction_text, True, self.COLORS['text_disabled'])
+        instruction_rect = instruction.get_rect(center=(self.screen.get_width() // 2, 350))
+        self.screen.blit(instruction, instruction_rect)
 
         pygame.display.flip()
 
     def draw_lobby(self):
-        """Disegna la schermata della lobby con nomi giocatori."""
+        """Disegna la schermata della lobby con nomi giocatori (nasconde disconnessi)."""
         # Sfondo gradiente
         self.draw_gradient_rect(self.screen, (20, 20, 30), (40, 40, 60),
                                 (0, 0, self.screen.get_width(), self.screen.get_height()))
@@ -429,20 +286,6 @@ class BombermanClient:
         self.draw_gradient_rect(self.screen, self.COLORS['bg_medium'], self.COLORS['bg_light'], players_panel)
         pygame.draw.rect(self.screen, self.COLORS['border_light'], players_panel, 3, border_radius=10)
 
-        # Pulsante X per uscire (solo per giocatori, non spettatori)
-        if not self.is_spectator:
-            exit_button = pygame.Rect(330, 110, 25, 25)
-            pulse = abs(math.sin(self.animation_timer * 0.03)) * 10
-            exit_color = (200 + int(pulse), 50, 50)
-
-            pygame.draw.rect(self.screen, exit_color, exit_button, border_radius=5)
-            pygame.draw.rect(self.screen, (255, 100, 100), exit_button, 2, border_radius=5)
-
-            # X centrata
-            x_text = self.font.render("X", True, (255, 255, 255))
-            x_rect = x_text.get_rect(center=exit_button.center)
-            self.screen.blit(x_text, x_rect)
-
         # Titolo pannello giocatori
         pygame.draw.circle(self.screen, self.COLORS['success'], (55, 120), 8)
         players_title = self.font.render("Players", True, self.COLORS['text_primary'])
@@ -452,81 +295,51 @@ class BombermanClient:
         connected_count = 0
         current_host = self.state.get("current_host_id", 0)
 
-        # Mostra slot giocatori con nomi
+        # Mostra slot giocatori con nomi (nasconde i disconnessi)
         for i in range(4):
             player_found = False
             for pid, pdata in self.state["players"].items():
                 if int(pid) == i:
+                    # Skip giocatori disconnessi - non mostrarli affatto
+                    if pdata.get("disconnected", False):
+                        break  # Salta questo giocatore, slot apparirà vuoto
+
                     player_found = True
                     player_name = pdata.get("name", f"Player {pid}")
 
-                    if pdata.get("disconnected", False):
-                        # Giocatore disconnesso - mostra timer
-                        disconnect_time_left = pdata.get("disconnect_time_left", 0)
-                        temp_away = pdata.get("temporarily_away", False)
+                    # Giocatore connesso
+                    connected_count += 1
 
-                        if temp_away:
-                            player_text = f"{player_name} - Away ({disconnect_time_left}s)"
-                        else:
-                            player_text = f"{player_name} - Reconnecting ({disconnect_time_left}s)"
+                    player_text = player_name
+                    if int(pid) == self.player_id and not self.is_spectator:
+                        player_text += " (You)"
+                    if int(pid) == current_host:
+                        player_text += " [HOST]"
 
-                        label = self.font.render(player_text, True, self.COLORS['text_disabled'])
-                        text_width = label.get_width()
+                    label = self.font.render(player_text, True, (255, 255, 255))
+                    text_width = label.get_width()
 
-                        slot_width = max(text_width + 20, 280)
-                        slot_rect = pygame.Rect(50, y_offset - 5, slot_width, 25)
+                    slot_width = max(text_width + 20, 200)
+                    slot_rect = pygame.Rect(50, y_offset - 5, slot_width, 25)
 
-                        if temp_away:
-                            slot_color = (80, 80, 120) if disconnect_time_left > 10 else (120, 80, 100)
-                        else:
-                            slot_color = (100, 100, 50) if disconnect_time_left > 10 else (150, 50, 50)
+                    color = PLAYER_COLORS[i]
+                    pygame.draw.rect(self.screen, color, slot_rect, border_radius=5)
+                    pygame.draw.rect(self.screen, self.COLORS['border_light'], slot_rect, 2, border_radius=5)
 
-                        pygame.draw.rect(self.screen, slot_color, slot_rect, border_radius=5)
-                        pygame.draw.rect(self.screen, self.COLORS['border'], slot_rect, 2, border_radius=5)
+                    text_rect = label.get_rect(center=slot_rect.center)
+                    self.screen.blit(label, text_rect)
 
-                        text_rect = label.get_rect(center=slot_rect.center)
-                        self.screen.blit(label, text_rect)
-
-                        # Barra di progresso del timer
-                        progress_width = int((disconnect_time_left / 20.0) * (slot_width - 10))
-                        if progress_width > 0:
-                            progress_rect = pygame.Rect(slot_rect.x + 5, slot_rect.bottom - 5, progress_width, 3)
-                            progress_color = self.COLORS['info'] if temp_away else self.COLORS['warning']
-                            pygame.draw.rect(self.screen, progress_color, progress_rect)
-                    else:
-                        # Giocatore connesso
-                        connected_count += 1
-
-                        player_text = player_name
-                        if int(pid) == self.player_id and not self.is_spectator:
-                            player_text += " (You)"
-                        if int(pid) == current_host:
-                            player_text += " [HOST]"
-
-                        label = self.font.render(player_text, True, (255, 255, 255))
-                        text_width = label.get_width()
-
-                        slot_width = max(text_width + 20, 200)
-                        slot_rect = pygame.Rect(50, y_offset - 5, slot_width, 25)
-
-                        color = PLAYER_COLORS[i]
-                        pygame.draw.rect(self.screen, color, slot_rect, border_radius=5)
-                        pygame.draw.rect(self.screen, self.COLORS['border_light'], slot_rect, 2, border_radius=5)
-
-                        text_rect = label.get_rect(center=slot_rect.center)
-                        self.screen.blit(label, text_rect)
-
-                        # Indicatore host
-                        if int(pid) == current_host:
-                            crown_rect = pygame.Rect(slot_rect.right - 30, slot_rect.y + 2, 20, 20)
-                            pygame.draw.rect(self.screen, (255, 215, 0), crown_rect, border_radius=3)
-                            crown_text = self.small_font.render("H", True, (0, 0, 0))
-                            crown_text_rect = crown_text.get_rect(center=crown_rect.center)
-                            self.screen.blit(crown_text, crown_text_rect)
+                    # Indicatore host
+                    if int(pid) == current_host:
+                        crown_rect = pygame.Rect(slot_rect.right - 30, slot_rect.y + 2, 20, 20)
+                        pygame.draw.rect(self.screen, (255, 215, 0), crown_rect, border_radius=3)
+                        crown_text = self.small_font.render("H", True, (0, 0, 0))
+                        crown_text_rect = crown_text.get_rect(center=crown_rect.center)
+                        self.screen.blit(crown_text, crown_text_rect)
                     break
 
             if not player_found:
-                # Slot vuoto
+                # Slot vuoto (include giocatori disconnessi che vengono nascosti)
                 slot_rect = pygame.Rect(50, y_offset - 5, 200, 25)
                 pygame.draw.rect(self.screen, (40, 40, 50), slot_rect, border_radius=5)
                 pygame.draw.rect(self.screen, (60, 60, 70), slot_rect, 1, border_radius=5)
@@ -625,7 +438,7 @@ class BombermanClient:
                 text_rect = full_text.get_rect(center=(340, 392))
                 self.screen.blit(full_text, text_rect)
         elif connected_count < 2:
-            wait_text = self.font.render("Waiting for players... (X: Leave)", True, self.COLORS['text_secondary'])
+            wait_text = self.font.render("Waiting for players...", True, self.COLORS['text_secondary'])
             text_rect = wait_text.get_rect(center=(340, 392))
             self.screen.blit(wait_text, text_rect)
         else:
@@ -640,59 +453,259 @@ class BombermanClient:
                 text_rect = start_text.get_rect(center=start_rect.center)
                 self.screen.blit(start_text, text_rect)
             else:
-                wait_text = self.font.render("Waiting for host... (X: Leave)", True, self.COLORS['text_secondary'])
+                wait_text = self.font.render("Waiting for host...", True, self.COLORS['text_secondary'])
                 text_rect = wait_text.get_rect(center=(340, 392))
                 self.screen.blit(wait_text, text_rect)
+
+        # Info sulla propria identità (in basso a sinistra)
+        identity_text = f"You are: {self.player_name}"
+        if self.is_spectator:
+            identity_text += " (Spectator)"
+
+        identity_surf = self.small_font.render(identity_text, True, self.COLORS['text_disabled'])
+        self.screen.blit(identity_surf, (10, self.screen.get_height() - 25))
 
         pygame.display.flip()
 
     def draw_game(self):
-        """Disegna il gioco."""
+        """Disegna il gioco con grafica migliorata e sidebar completa."""
         self.screen.fill(self.COLORS['bg_dark'])
 
         if not self.state or "map" not in self.state:
             return
 
+        # Aggiorna animazione
         self.animation_timer += 1
 
-        # Disegna la mappa
+        # Ombra per la griglia di gioco
+        shadow_rect = pygame.Rect(5, 5, self.map_width_px, self.map_height_px)
+        pygame.draw.rect(self.screen, (5, 5, 10), shadow_rect)
+
+        # Sfondo della griglia
+        pygame.draw.rect(self.screen, (20, 20, 25), (0, 0, self.map_width_px, self.map_height_px))
+
+        # Disegna la mappa con effetti
         for y, row in enumerate(self.state["map"]):
             for x, tile in enumerate(row):
                 rect = pygame.Rect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
 
                 if tile == TILE_EMPTY:
+                    # Pavimento con pattern
                     color = (30, 30, 35) if (x + y) % 2 == 0 else (35, 35, 40)
                     pygame.draw.rect(self.screen, color, rect)
                 elif tile == TILE_WALL:
+                    # Muri con gradiente
                     self.draw_gradient_rect(self.screen, (80, 80, 90), (100, 100, 110), rect)
                     pygame.draw.rect(self.screen, (120, 120, 130), rect, 2)
                 elif tile == TILE_BLOCK:
+                    # Blocchi distruttibili con texture
                     self.draw_gradient_rect(self.screen, (150, 75, 0), (180, 95, 20), rect)
                     pygame.draw.rect(self.screen, (200, 115, 40), rect, 2)
+                    # Pattern interno
+                    pygame.draw.line(self.screen, (130, 65, 0),
+                                     (rect.x + 5, rect.y + 5), (rect.x + 15, rect.y + 15), 2)
+                    pygame.draw.line(self.screen, (130, 65, 0),
+                                     (rect.x + TILE_SIZE - 5, rect.y + 5),
+                                     (rect.x + TILE_SIZE - 15, rect.y + 15), 2)
 
-        # Disegna le bombe
+        # Disegna le bombe con animazione
         for bomb in self.state.get("bombs", []):
             if bomb.get("timer", 0) > 0:
                 bomb_x = bomb["x"] * TILE_SIZE + TILE_SIZE // 2
                 bomb_y = bomb["y"] * TILE_SIZE + TILE_SIZE // 2
+
+                # Pulsazione della bomba
                 pulse = abs(math.sin(self.animation_timer * 0.1)) * 3
                 radius = 12 + pulse
-                pygame.draw.circle(self.screen, (255, 0, 0), (bomb_x, bomb_y), radius)
 
-        # Disegna le esplosioni
+                # Ombra
+                pygame.draw.circle(self.screen, (20, 0, 0), (bomb_x + 2, bomb_y + 2), radius)
+                # Bomba
+                pygame.draw.circle(self.screen, (60, 0, 0), (bomb_x, bomb_y), radius)
+                pygame.draw.circle(self.screen, (255, 0, 0), (bomb_x, bomb_y), radius, 3)
+                # Highlight
+                pygame.draw.circle(self.screen, (255, 100, 100), (bomb_x - 4, bomb_y - 4), 4)
+
+        # Disegna le esplosioni con effetto
         for explosion in self.state.get("explosions", []):
             for ex, ey in explosion["positions"]:
                 rect = pygame.Rect(ex * TILE_SIZE, ey * TILE_SIZE, TILE_SIZE, TILE_SIZE)
-                pygame.draw.rect(self.screen, (255, 200, 0), rect)
+                # Effetto fuoco animato
+                for i in range(3):
+                    flame_rect = rect.inflate(-i*8, -i*8)
+                    alpha = explosion["timer"] * 50
+                    color = (255, 200 - i*50, 0)
+                    pygame.draw.rect(self.screen, color, flame_rect)
 
-        # Disegna i giocatori
+        # Disegna i giocatori con ombra
         for pid, pdata in self.state["players"].items():
             if pdata["alive"] and not pdata.get("disconnected", False):
                 player_x = pdata["x"] * TILE_SIZE
                 player_y = pdata["y"] * TILE_SIZE
+
+                # Ombra
+                shadow_rect = pygame.Rect(player_x + 3, player_y + 3, TILE_SIZE - 2, TILE_SIZE - 2)
+                pygame.draw.ellipse(self.screen, (10, 10, 15), shadow_rect)
+
+                # Giocatore
                 color = PLAYER_COLORS[int(pid) % len(PLAYER_COLORS)]
                 player_rect = pygame.Rect(player_x + 2, player_y + 2, TILE_SIZE - 4, TILE_SIZE - 4)
                 pygame.draw.rect(self.screen, color, player_rect, border_radius=8)
+
+                # Bordo luminoso
+                pygame.draw.rect(self.screen, (255, 255, 255), player_rect, 2, border_radius=8)
+
+                # Numero giocatore
+                num_text = self.small_font.render(str(pid), True, (0, 0, 0))
+                num_rect = num_text.get_rect(center=player_rect.center)
+                self.screen.blit(num_text, num_rect)
+
+        # Se siamo spettatori, mostra indicatore
+        if self.is_spectator:
+            spec_surf = pygame.Surface((200, 30))
+            spec_surf.set_alpha(200)
+            spec_surf.fill((0, 0, 0))
+            self.screen.blit(spec_surf, (10, 10))
+            spec_text = self.font.render("SPECTATOR MODE", True, self.COLORS['warning'])
+            self.screen.blit(spec_text, (20, 15))
+
+        # === SIDEBAR MIGLIORATA ===
+        sidebar_x = self.map_width_px
+
+        # Sfondo sidebar con gradiente
+        sidebar_rect = pygame.Rect(sidebar_x, 0, self.sidebar_width, self.map_height_px)
+        self.draw_gradient_rect(self.screen, self.COLORS['bg_medium'], self.COLORS['bg_dark'], sidebar_rect)
+        pygame.draw.line(self.screen, self.COLORS['border'], (sidebar_x, 0), (sidebar_x, self.map_height_px), 3)
+
+        # Pannello giocatori
+        y_offset = 10
+        players_panel = pygame.Rect(sidebar_x + 10, y_offset, self.sidebar_width - 20, 140)
+        self.draw_rounded_rect(self.screen, self.COLORS['bg_light'], players_panel)
+        pygame.draw.rect(self.screen, self.COLORS['border'], players_panel, 2, border_radius=8)
+
+        # Titolo pannello
+        title_text = self.font.render("Players", True, self.COLORS['text_primary'])
+        self.screen.blit(title_text, (sidebar_x + 20, y_offset + 5))
+
+        y_offset += 30
+
+        # Mostra tutti e 4 gli slot giocatori
+        for slot_id in range(4):
+            if y_offset > 130:
+                break
+
+            player_found = False
+            player_name = f"Player {slot_id}"
+
+            # Cerca il giocatore per questo slot
+            for pid, pdata in self.state["players"].items():
+                if int(pid) == slot_id:
+                    player_found = True
+                    player_name = pdata.get("name", f"Player {pid}")
+
+                    if pdata.get("disconnected", False):
+                        # Giocatore disconnesso
+                        status_color = self.COLORS['text_disabled']
+                        status_text = "disconnected"
+                    elif not pdata["alive"] or pdata.get("lives", 0) <= 0:
+                        # Giocatore eliminato
+                        status_color = self.COLORS['danger']
+                        status_text = "eliminated"
+                    else:
+                        # Giocatore vivo
+                        status_color = PLAYER_COLORS[int(pid) % len(PLAYER_COLORS)]
+                        hearts = "♥" * pdata.get("lives", 0)
+                        status_text = hearts
+                    break
+
+            if not player_found:
+                # Slot vuoto
+                status_color = self.COLORS['text_disabled']
+                status_text = "empty slot"
+                player_name = f"Slot {slot_id}"
+
+            # Disegna info giocatore/slot
+            pygame.draw.circle(self.screen, status_color, (sidebar_x + 25, y_offset + 8), 6)
+            player_text = f"{player_name}"
+            player_surf = self.small_font.render(player_text, True, self.COLORS['text_primary'])
+            self.screen.blit(player_surf, (sidebar_x + 35, y_offset))
+
+            # Stato del giocatore (cuori, eliminated, disconnected, o empty)
+            status_surf = self.small_font.render(status_text, True, status_color)
+            self.screen.blit(status_surf, (sidebar_x + 35, y_offset + 12))
+
+            y_offset += 30
+
+        # Contatore spettatori
+        if self.state.get("spectators"):
+            spec_count = len(self.state["spectators"])
+            spec_rect = pygame.Rect(sidebar_x + 10, 160, self.sidebar_width - 20, 25)
+            pygame.draw.rect(self.screen, self.COLORS['bg_light'], spec_rect, border_radius=5)
+            spec_text = self.small_font.render(f"👁 {spec_count} Spectators", True, self.COLORS['info'])
+            self.screen.blit(spec_text, (sidebar_x + 20, 165))
+
+        # Pannello chat
+        chat_y = 200
+        chat_panel = pygame.Rect(sidebar_x + 10, chat_y, self.sidebar_width - 20,
+                                 self.map_height_px - chat_y - 10)
+        self.draw_rounded_rect(self.screen, self.COLORS['bg_light'], chat_panel)
+        pygame.draw.rect(self.screen, self.COLORS['border'], chat_panel, 2, border_radius=8)
+
+        # Chat header
+        chat_header = pygame.Rect(sidebar_x + 10, chat_y, self.sidebar_width - 20, 25)
+        self.draw_gradient_rect(self.screen, self.COLORS['bg_medium'], self.COLORS['bg_light'], chat_header)
+        chat_title = self.small_font.render("💬 Chat", True, self.COLORS['text_primary'])
+        self.screen.blit(chat_title, (sidebar_x + 20, chat_y + 5))
+
+        # Messaggi
+        msg_y = chat_y + 30
+        if "chat_messages" in self.state:
+            for msg in self.state["chat_messages"][-5:]:
+                if msg_y > self.map_height_px - 50:
+                    break
+
+                if msg["is_system"]:
+                    color = self.COLORS['warning']
+                    text = msg["message"][:22]
+                elif msg.get("is_spectator", False):
+                    color = self.COLORS['info']
+                    sender_id = msg["player_id"]
+                    sender_name = "Unknown"
+                    for spec_id, spec_data in self.state.get("spectators", {}).items():
+                        if int(spec_id) == int(sender_id):
+                            sender_name = spec_data.get("name", f"Spectator {sender_id}")
+                            break
+                    text = f"{sender_name}: {msg['message']}"[:22]
+                else:
+                    pid = int(msg["player_id"])
+                    color = PLAYER_COLORS[pid % len(PLAYER_COLORS)]
+                    sender_name = f"Player {pid}"
+                    if str(pid) in self.state.get("players", {}):
+                        sender_name = self.state["players"][str(pid)].get("name", sender_name)
+                    text = f"{sender_name}: {msg['message']}"[:22]
+
+                msg_surf = self.small_font.render(text, True, color)
+                self.screen.blit(msg_surf, (sidebar_x + 15, msg_y))
+                msg_y += 18
+
+        # Input chat
+        input_y = self.map_height_px - 35
+        input_rect = pygame.Rect(sidebar_x + 15, input_y, self.sidebar_width - 30, 20)
+
+        if self.chat_active:
+            pygame.draw.rect(self.screen, (40, 40, 50), input_rect, border_radius=5)
+            pygame.draw.rect(self.screen, self.COLORS['success'], input_rect, 2, border_radius=5)
+            input_text = self.small_font.render(self.chat_input[-18:], True, self.COLORS['text_primary'])
+            self.screen.blit(input_text, (sidebar_x + 18, input_y + 2))
+
+            if self.cursor_visible:
+                cursor_x = sidebar_x + 18 + input_text.get_width()
+                pygame.draw.line(self.screen, self.COLORS['success'],
+                                 (cursor_x, input_y + 2), (cursor_x, input_y + 17), 2)
+        else:
+            pygame.draw.rect(self.screen, self.COLORS['bg_medium'], input_rect, border_radius=5)
+            hint = self.small_font.render("T: Chat", True, self.COLORS['text_disabled'])
+            self.screen.blit(hint, (sidebar_x + 18, input_y + 2))
 
         pygame.display.flip()
 
@@ -750,55 +763,6 @@ class BombermanClient:
         self.animation_timer += 1
         pygame.display.flip()
 
-    def attempt_join_lobby(self):
-        """Tenta di entrare nella lobby con il nome specificato."""
-        self.player_name = self.name_input.strip()
-        if len(self.player_name) < 2:
-            self.show_error("Nome troppo corto (minimo 2 caratteri)")
-            return
-
-        try:
-            # Invia handshake di sessione
-            session_handshake = json.dumps({
-                "type": "session_handshake",
-                "session_id": self.session_id,
-                "timestamp": time.time(),
-                "platform": platform.system()
-            })
-            self.sock.sendall((session_handshake + "\n").encode())
-
-            time.sleep(0.1)  # Breve pausa
-
-            # Invia richiesta di join
-            join_request = json.dumps({
-                "type": "join_request",
-                "session_id": self.session_id,
-                "player_name": self.player_name,
-                "timestamp": time.time()
-            })
-            self.sock.sendall((join_request + "\n").encode())
-            print(f"[CLIENT] Attempting to join with name: {self.player_name}")
-        except Exception as e:
-            self.show_error("Errore di connessione")
-            print(f"Error joining: {e}")
-
-    def handle_name_entry_input(self, event):
-        """Gestisce l'input nella schermata di inserimento nome."""
-        if self.name_input_active:
-            if event.key == pygame.K_RETURN:
-                if len(self.name_input.strip()) >= 2:
-                    self.attempt_join_lobby()
-                else:
-                    self.show_error("Nome troppo corto (minimo 2 caratteri)")
-            elif event.key == pygame.K_BACKSPACE:
-                self.name_input = self.name_input[:-1]
-            elif event.key == pygame.K_ESCAPE:
-                pygame.quit()
-                exit()
-            else:
-                if event.unicode and len(self.name_input) < 20 and event.unicode.isprintable():
-                    self.name_input += event.unicode
-
     def handle_game_input(self, event):
         """Gestisce l'input durante il gioco."""
         if event.key == pygame.K_t and not self.chat_active:
@@ -818,12 +782,6 @@ class BombermanClient:
             else:
                 if event.unicode and len(self.chat_input) < 45:
                     self.chat_input += event.unicode
-        elif (event.key == pygame.K_x and
-              self.current_screen == "lobby" and
-              not self.is_spectator and
-              not self.chat_active):
-            self.send_command("LEAVE_TEMPORARILY")
-            self.return_to_name_entry()
         elif not self.chat_active:
             if self.current_screen == "lobby":
                 self.handle_lobby_input(event)
@@ -865,34 +823,6 @@ class BombermanClient:
         if not self.is_spectator and event.key == pygame.K_RETURN:
             self.send_command("PLAY_AGAIN")
 
-    def show_error(self, message):
-        """Mostra un messaggio di errore temporaneo."""
-        self.join_error_message = message
-        self.error_timer = 90
-
-    def return_to_name_entry(self):
-        """Torna alla schermata di inserimento nome."""
-        self.current_screen = "name_entry"
-        self.name_input = self.player_name or ""
-        self.name_input_active = True
-        self.join_error_message = ""
-        self.state = None
-
     def handle_mouse_click(self, pos):
         """Gestisce i click del mouse."""
-        mouse_x, mouse_y = pos
-
-        if self.current_screen == "lobby" and not self.is_spectator:
-            exit_button = pygame.Rect(330, 110, 25, 25)
-            if exit_button.collidepoint(mouse_x, mouse_y):
-                self.send_command("LEAVE_TEMPORARILY")
-                self.return_to_name_entry()
-
-        elif self.current_screen == "name_entry":
-            join_button = pygame.Rect(240, 320, 200, 45)
-            if join_button.collidepoint(mouse_x, mouse_y) and len(self.name_input.strip()) >= 2:
-                self.attempt_join_lobby()
-
-            name_box = pygame.Rect(150, 240, 380, 50)
-            if name_box.collidepoint(mouse_x, mouse_y):
-                self.name_input_active = True
+        pass

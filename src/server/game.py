@@ -74,17 +74,10 @@ class GameServer:
         if spectator_id not in self.s.spectators:
             return -1
 
-        # trova slot libero o timeout scaduto
+        # trova slot libero (senza timeout)
         new_pid = None
         for i in range(4):
             if i not in self.s.players:
-                new_pid = i; break
-            elif self.s.players[i].disconnected and self.s.players[i].disconnect_time_left <= 0:
-                # ripulisci mapping obsoleti e libera slot
-                stale = [cid for cid, pid in list(self.s.client_player_mapping.items()) if pid == i]
-                for cid in stale:
-                    del self.s.client_player_mapping[cid]
-                del self.s.players[i]
                 new_pid = i; break
 
         if new_pid is None:
@@ -98,78 +91,51 @@ class GameServer:
         self.add_chat_message(-1, f"{name} joined as Player {new_pid}", is_system=True)
         return new_pid
 
-    # ---------- Reconnect ----------
-    def register_client_player(self, client_id: str, player_id: int) -> None:
-        self.s.client_player_mapping[client_id] = player_id
-        print(f"[REGISTER] Client {client_id} registered as Player {player_id}")
-
-    def handle_client_handshake(self, client_id: str):
-        print(f"[HANDSHAKE] Checking client {client_id}")
-        if client_id in self.s.client_player_mapping:
-            pid = self.s.client_player_mapping[client_id]
-            print(f"[HANDSHAKE] Client {client_id} was mapped to player {pid}")
-            if pid not in self.s.players:
-                print(f"[HANDSHAKE] Player {pid} no longer exists, removing mapping")
-                del self.s.client_player_mapping[client_id]
-                return None, None
-            p = self.s.players[pid]
-            if p.disconnected and p.disconnect_time_left > 0 and not p.already_reconnected and p.original_client_id == client_id:
-                print(f"[HANDSHAKE] Valid reconnection for client {client_id} as player {pid}")
-                return pid, False
-            print(f"[HANDSHAKE] Invalid reconnection for client {client_id} → remove stale mapping")
-            del self.s.client_player_mapping[client_id]
-        print(f"[HANDSHAKE] Client {client_id} is a new connection")
-        return None, None
-
-    def cleanup_client_mappings(self) -> None:
-        stale = [cid for cid, pid in self.s.client_player_mapping.items() if pid not in self.s.players]
-        for cid in stale:
-            del self.s.client_player_mapping[cid]
-            print(f"[CLEANUP] Removed obsolete client mapping: {cid}")
-
+    # ---------- Simplified Disconnect System ----------
     def handle_player_disconnect(self, player_id: int, temporarily_away: bool = False) -> None:
         p = self.s.players.get(player_id)
         if not p: return
 
-        p.was_alive_before_disconnect = p.alive
-        p.alive = False
-        p.disconnected = True
-        p.disconnect_time = time.time()
-        p.disconnect_time_left = DISCONNECT_TIMEOUT
-        p.already_reconnected = False
-        p.temporarily_away = temporarily_away
-
         player_name = p.name or f"Player {player_id}"
-        print(f"[DISCONNECT] {player_name} disconnected (client: {p.original_client_id})")
+        print(f"[DISCONNECT] {player_name} disconnected")
 
-        if temporarily_away:
-            self.add_chat_message(-1, f"{player_name} left temporarily", is_system=True)
-        else:
+        if self.s.game_state == GAME_STATE_LOBBY:
+            # In lobby: rimuovi completamente il giocatore
+            if player_id in self.s.players:
+                del self.s.players[player_id]
+
+            # Ripulisci i mapping
+            stale = [cid for cid, pid in list(self.s.client_player_mapping.items()) if pid == player_id]
+            for cid in stale:
+                del self.s.client_player_mapping[cid]
+
+            self.add_chat_message(-1, f"{player_name} left the lobby", is_system=True)
+
+            # Reassign host se necessario
+            if player_id == self.s.current_host_id:
+                self.get_current_host()
+
+        elif self.s.game_state == GAME_STATE_PLAYING:
+            # In gioco: marca come disconnesso ma mantieni nel gioco
+            p.disconnected = True
+            p.alive = False  # Non può più giocare
             self.add_chat_message(-1, f"{player_name} disconnected", is_system=True)
 
-        if self.s.game_state == GAME_STATE_LOBBY and player_id == self.get_current_host():
-            self.get_current_host()
-        if self.s.game_state == GAME_STATE_PLAYING:
+            # Controlla vittoria dopo disconnessione
             self.check_victory()
 
-    def reconnect_player(self, player_id: int, client_id: str) -> bool:
-        p = self.s.players.get(player_id)
-        if not p: return False
-        if (not p.disconnected) or p.disconnect_time_left <= 0 or p.already_reconnected: return False
-        if p.original_client_id != client_id: return False
+    # ---------- Rimozione sistema di riconnessione ----------
+    def register_client_player(self, client_id: str, player_id: int) -> None:
+        # Semplificato - solo per tracking
+        self.s.client_player_mapping[client_id] = player_id
+        print(f"[REGISTER] Client {client_id} registered as Player {player_id}")
 
-        p.disconnected = False
-        p.disconnect_time = None
-        p.disconnect_time_left = 0
-        p.already_reconnected = True
-        p.temporarily_away = False
-
-        if self.s.game_state == GAME_STATE_PLAYING and p.was_alive_before_disconnect:
-            p.alive = True
-
-        player_name = p.name or f"Player {player_id}"
-        self.add_chat_message(-1, f"{player_name} reconnected!", is_system=True)
-        return True
+    def cleanup_client_mappings(self) -> None:
+        # Ripulisce solo mapping per giocatori che non esistono più
+        stale = [cid for cid, pid in self.s.client_player_mapping.items() if pid not in self.s.players]
+        for cid in stale:
+            del self.s.client_player_mapping[cid]
+            print(f"[CLEANUP] Removed obsolete client mapping: {cid}")
 
     # ---------- Chat ----------
     def add_chat_message(self, sender_id: int, message: str, is_system: bool=False):
@@ -182,7 +148,7 @@ class GameServer:
     def place_bomb(self, player_id: int) -> None:
         core_place_bomb(self.s, player_id)
 
-    # ---------- Tick / Orchestrazione ----------
+    # ---------- Tick / Orchestrazione Semplificata ----------
     def tick(self) -> None:
         if self.s.game_state == GAME_STATE_VICTORY:
             self.s.victory_timer -= 1
@@ -190,25 +156,7 @@ class GameServer:
                 self.return_to_lobby()
             return
 
-        # aggiorna timeout reconnect
-        now = time.time()
-        to_remove = []
-        for pid, p in self.s.players.items():
-            if p.disconnected and p.disconnect_time:
-                left = DISCONNECT_TIMEOUT - (now - p.disconnect_time)
-                if left <= 0:
-                    to_remove.append(pid)
-                else:
-                    p.disconnect_time_left = int(left)
-
-        for pid in to_remove:
-            player_name = self.s.players[pid].name if pid in self.s.players else f"Player {pid}"
-            stale = [cid for cid, mapped in list(self.s.client_player_mapping.items()) if mapped == pid]
-            for cid in stale:
-                del self.s.client_player_mapping[cid]
-            del self.s.players[pid]
-            print(f"[TIMEOUT] {player_name} removed from game")
-            self.add_chat_message(-1, f"{player_name} left the lobby", is_system=True)
+        # Non c'è più gestione timeout di riconnessione
 
         if self.s.game_state != GAME_STATE_PLAYING:
             return

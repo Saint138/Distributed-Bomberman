@@ -1,10 +1,8 @@
-import socket, threading, time, json, os, sys
+import socket, threading, time, json, os, sys, random
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), ".")))
-
 
 # Aggiungi questa riga per includere la directory padre
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 
 from server.game import GameServer
 from server.network import handle_client
@@ -16,13 +14,47 @@ player_slots = [False, False, False, False]
 
 game = GameServer()
 
+# Lista di nomi casuali
+RANDOM_NAMES = [
+    "Bomber", "Blaster", "Dynamite", "Thunder", "Flash", "Storm", "Phoenix",
+    "Shadow", "Viper", "Rocket", "Ninja", "Falcon", "Tiger", "Wolf", "Eagle",
+    "Hunter", "Warrior", "Knight", "Ranger", "Scout", "Sniper", "Ghost",
+    "Phantom", "Mystic", "Raven", "Hawk", "Dragon", "Cobra", "Panther", "Lion",
+    "Ace", "Blade", "Cyber", "Echo", "Frost", "Grim", "Hero", "Iron", "Jade",
+    "King", "Legend", "Master", "Nova", "Onyx", "Prime", "Quest", "Rebel",
+    "Spike", "Titan", "Ultra", "Vector", "Wild", "Xenon", "Yell", "Zero"
+]
+
+def generate_unique_name():
+    """Genera un nome unico non ancora in uso."""
+    used_names = set()
+    for player in game.s.players.values():
+        if hasattr(player, 'name') and player.name:
+            used_names.add(player.name)
+    for spectator in game.s.spectators.values():
+        if spectator.get("name"):
+            used_names.add(spectator["name"])
+
+    # Prova prima con nomi base
+    available_names = [name for name in RANDOM_NAMES if name not in used_names]
+    if available_names:
+        return random.choice(available_names)
+
+    # Se tutti i nomi base sono usati, aggiungi numeri
+    for i in range(1, 1000):
+        name = f"{random.choice(RANDOM_NAMES)}{i}"
+        if name not in used_names:
+            return name
+
+    # Fallback estremo
+    return f"Player{random.randint(1000, 9999)}"
+
 def get_free_player_slot():
+    """Trova slot libero - semplificato senza timeout."""
     for i in range(MAX_PLAYERS):
         if not player_slots[i]:
-            # slot libero o scaduto timeout di un ex-player
-            if (i not in game.s.players) or (
-                    game.s.players[i].disconnected and game.s.players[i].disconnect_time_left <= 0
-            ):
+            # Slot libero
+            if i not in game.s.players:
                 return i
     return None
 
@@ -64,138 +96,16 @@ def start_server(host="localhost", port=5555):
         conn, addr = srv.accept()
         print(f"[NEW CONNECTION] {addr} connecting...")
 
-        # 1) Leggi il primo messaggio per determinare il tipo
         try:
-            first_data = conn.recv(1024)
-            if not first_data:
-                print(f"[ERROR] No data from {addr}")
-                conn.close()
-                continue
+            # Genera un nome casuale unico
+            player_name = generate_unique_name()
+            client_session_id = f"client_{random.randint(10000, 99999)}_{time.time()}"
 
-            message = json.loads(first_data.decode().strip())
-            message_type = message.get("type")
+            print(f"[AUTO-ASSIGN] Generated name: {player_name}")
 
-            if message_type == "session_handshake":
-                # È un handshake di sessione, aspetta il join_request
-                session_id = message.get("session_id")
-                print(f"[HANDSHAKE] Session handshake received: {session_id}")
-
-                # Leggi il join_request successivo
-                join_data = conn.recv(1024)
-                if not join_data:
-                    print(f"[ERROR] No join request after handshake from {addr}")
-                    conn.close()
-                    continue
-
-                join_message = json.loads(join_data.decode().strip())
-                if join_message.get("type") != "join_request":
-                    print(f"[ERROR] Expected join_request, got {join_message.get('type')}")
-                    conn.close()
-                    continue
-
-                player_name = join_message.get("player_name", "").strip()
-                client_session_id = join_message.get("session_id", session_id)
-
-            elif message_type == "join_request":
-                # Join diretto senza handshake di sessione
-                player_name = message.get("player_name", "").strip()
-                client_session_id = message.get("session_id", "default")
-
-            else:
-                print(f"[ERROR] Unknown message type: {message_type}")
-                conn.close()
-                continue
-
-        except Exception as e:
-            print(f"[ERROR] Failed to parse initial message: {e}")
-            try: conn.close()
-            except: pass
-            continue
-
-        # 2) Valida il nome
-        if not player_name or len(player_name) < 2:
-            error_response = json.dumps({
-                "error": "name_too_short",
-                "details": "Name must be at least 2 characters long"
-            })
-            try:
-                conn.sendall((error_response + "\n").encode())
-                conn.close()
-            except:
-                pass
-            continue
-
-        # 3) Controlla se il nome è già in uso
-        name_taken = False
-        for player in game.s.players.values():
-            if hasattr(player, 'name') and player.name and player.name.lower() == player_name.lower() and not player.disconnected:
-                name_taken = True
-                break
-
-        if name_taken:
-            error_response = json.dumps({
-                "error": "name_taken",
-                "details": f"Name '{player_name}' is already in use"
-            })
-            try:
-                conn.sendall((error_response + "\n").encode())
-                conn.close()
-            except:
-                pass
-            continue
-
-        # 4) Determina se assegnare come player o spectator
-        if game.s.game_state == "playing":
-            # Partita in corso -> spettatore
-            spectator_id = game.add_spectator(player_name)
-            spectator_clients.append(conn)
-
-            # Invia conferma di join
-            success_response = json.dumps({
-                "join_success": True,
-                "player_id": spectator_id,
-                "is_spectator": True,
-                "player_name": player_name
-            })
-            conn.sendall((success_response + "\n").encode())
-
-            threading.Thread(
-                target=handle_client,
-                args=(conn, addr, spectator_clients, game, spectator_id, True, None, player_name, client_session_id),
-                daemon=True
-            ).start()
-            print(f"[SPECTATOR] {addr} -> Spectator {spectator_id} ({player_name}) - game in progress")
-
-        else:
-            # Siamo in lobby
-            free_slot = get_free_player_slot()
-            if free_slot is not None:
-                # Slot disponibile -> player
-                player_slots[free_slot] = True
-                game.add_player(free_slot, player_name)
-                game.s.players[free_slot].original_client_id = client_session_id
-                game.register_client_player(client_session_id, free_slot)
-
-                clients.append(conn)
-
-                # Invia conferma di join
-                success_response = json.dumps({
-                    "join_success": True,
-                    "player_id": free_slot,
-                    "is_spectator": False,
-                    "player_name": player_name
-                })
-                conn.sendall((success_response + "\n").encode())
-
-                threading.Thread(
-                    target=handle_client,
-                    args=(conn, addr, clients, game, free_slot, False, player_slots, player_name, client_session_id),
-                    daemon=True
-                ).start()
-                print(f"[PLAYER] {addr} -> Player {free_slot} ({player_name})")
-
-            else:
-                # Lobby piena -> spettatore
+            # Determina se assegnare come player o spectator
+            if game.s.game_state == "playing":
+                # Partita in corso -> spettatore
                 spectator_id = game.add_spectator(player_name)
                 spectator_clients.append(conn)
 
@@ -213,7 +123,63 @@ def start_server(host="localhost", port=5555):
                     args=(conn, addr, spectator_clients, game, spectator_id, True, None, player_name, client_session_id),
                     daemon=True
                 ).start()
-                print(f"[SPECTATOR] {addr} -> Spectator {spectator_id} ({player_name}) - lobby full")
+                print(f"[SPECTATOR] {addr} -> Spectator {spectator_id} ({player_name}) - game in progress")
+
+            else:
+                # Siamo in lobby
+                free_slot = get_free_player_slot()
+                if free_slot is not None:
+                    # Slot disponibile -> player
+                    player_slots[free_slot] = True
+                    game.add_player(free_slot, player_name)
+                    game.s.players[free_slot].original_client_id = client_session_id
+                    game.register_client_player(client_session_id, free_slot)
+
+                    clients.append(conn)
+
+                    # Invia conferma di join
+                    success_response = json.dumps({
+                        "join_success": True,
+                        "player_id": free_slot,
+                        "is_spectator": False,
+                        "player_name": player_name
+                    })
+                    conn.sendall((success_response + "\n").encode())
+
+                    threading.Thread(
+                        target=handle_client,
+                        args=(conn, addr, clients, game, free_slot, False, player_slots, player_name, client_session_id),
+                        daemon=True
+                    ).start()
+                    print(f"[PLAYER] {addr} -> Player {free_slot} ({player_name})")
+
+                else:
+                    # Lobby piena -> spettatore
+                    spectator_id = game.add_spectator(player_name)
+                    spectator_clients.append(conn)
+
+                    # Invia conferma di join
+                    success_response = json.dumps({
+                        "join_success": True,
+                        "player_id": spectator_id,
+                        "is_spectator": True,
+                        "player_name": player_name
+                    })
+                    conn.sendall((success_response + "\n").encode())
+
+                    threading.Thread(
+                        target=handle_client,
+                        args=(conn, addr, spectator_clients, game, spectator_id, True, None, player_name, client_session_id),
+                        daemon=True
+                    ).start()
+                    print(f"[SPECTATOR] {addr} -> Spectator {spectator_id} ({player_name}) - lobby full")
+
+        except Exception as e:
+            print(f"[ERROR] Error handling connection from {addr}: {e}")
+            try:
+                conn.close()
+            except:
+                pass
 
 if __name__ == "__main__":
     start_server()
