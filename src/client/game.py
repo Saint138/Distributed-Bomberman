@@ -329,9 +329,9 @@ class BombermanClient:
                     text_rect = label.get_rect(center=slot_rect.center)
                     self.screen.blit(label, text_rect)
 
-                    # Indicatore host
+                    # Indicatore host - spostato più a destra per evitare sovrapposizioni
                     if int(pid) == current_host:
-                        crown_rect = pygame.Rect(slot_rect.right - 30, slot_rect.y + 2, 20, 20)
+                        crown_rect = pygame.Rect(slot_rect.right + 5, slot_rect.y + 2, 20, 20)
                         pygame.draw.rect(self.screen, (255, 215, 0), crown_rect, border_radius=3)
                         crown_text = self.small_font.render("H", True, (0, 0, 0))
                         crown_text_rect = crown_text.get_rect(center=crown_rect.center)
@@ -457,13 +457,13 @@ class BombermanClient:
                 text_rect = wait_text.get_rect(center=(340, 392))
                 self.screen.blit(wait_text, text_rect)
 
-        # Info sulla propria identità (in basso a sinistra)
+        # Info sulla propria identità (spostata più in alto per non toccare il pannello azioni)
         identity_text = f"You are: {self.player_name}"
         if self.is_spectator:
             identity_text += " (Spectator)"
 
         identity_surf = self.small_font.render(identity_text, True, self.COLORS['text_disabled'])
-        self.screen.blit(identity_surf, (10, self.screen.get_height() - 25))
+        self.screen.blit(identity_surf, (10, self.screen.get_height() - 55))  # Spostato da -25 a -55
 
         pygame.display.flip()
 
@@ -577,9 +577,9 @@ class BombermanClient:
         self.draw_gradient_rect(self.screen, self.COLORS['bg_medium'], self.COLORS['bg_dark'], sidebar_rect)
         pygame.draw.line(self.screen, self.COLORS['border'], (sidebar_x, 0), (sidebar_x, self.map_height_px), 3)
 
-        # Pannello giocatori
+        # Pannello giocatori - AUMENTATO L'ALTEZZA
         y_offset = 10
-        players_panel = pygame.Rect(sidebar_x + 10, y_offset, self.sidebar_width - 20, 140)
+        players_panel = pygame.Rect(sidebar_x + 10, y_offset, self.sidebar_width - 20, 160)  # Da 140 a 160
         self.draw_rounded_rect(self.screen, self.COLORS['bg_light'], players_panel)
         pygame.draw.rect(self.screen, self.COLORS['border'], players_panel, 2, border_radius=8)
 
@@ -589,9 +589,9 @@ class BombermanClient:
 
         y_offset += 30
 
-        # Mostra tutti e 4 gli slot giocatori
+        # Mostra tutti e 4 gli slot giocatori - RIDOTTO SPAZIATURA
         for slot_id in range(4):
-            if y_offset > 130:
+            if y_offset > 150:  # Aumentato limite
                 break
 
             player_found = False
@@ -602,6 +602,10 @@ class BombermanClient:
                 if int(pid) == slot_id:
                     player_found = True
                     player_name = pdata.get("name", f"Player {pid}")
+
+                    # AGGIUNGI INDICATORE "YOU" SE È IL GIOCATORE CORRENTE
+                    if int(pid) == self.player_id and not self.is_spectator:
+                        player_name += " (YOU)"
 
                     if pdata.get("disconnected", False):
                         # Giocatore disconnesso
@@ -626,7 +630,8 @@ class BombermanClient:
 
             # Disegna info giocatore/slot
             pygame.draw.circle(self.screen, status_color, (sidebar_x + 25, y_offset + 8), 6)
-            player_text = f"{player_name}"
+            # RIDUCI LUNGHEZZA NOME PER FARLO STARE
+            player_text = player_name[:15] + "..." if len(player_name) > 15 else player_name
             player_surf = self.small_font.render(player_text, True, self.COLORS['text_primary'])
             self.screen.blit(player_surf, (sidebar_x + 35, y_offset))
 
@@ -634,18 +639,18 @@ class BombermanClient:
             status_surf = self.small_font.render(status_text, True, status_color)
             self.screen.blit(status_surf, (sidebar_x + 35, y_offset + 12))
 
-            y_offset += 30
+            y_offset += 28  # RIDOTTO DA 30 A 28
 
-        # Contatore spettatori
+        # Contatore spettatori - SPOSTATO PIÙ IN BASSO
         if self.state.get("spectators"):
             spec_count = len(self.state["spectators"])
-            spec_rect = pygame.Rect(sidebar_x + 10, 160, self.sidebar_width - 20, 25)
+            spec_rect = pygame.Rect(sidebar_x + 10, 180, self.sidebar_width - 20, 25)  # Da 160 a 180
             pygame.draw.rect(self.screen, self.COLORS['bg_light'], spec_rect, border_radius=5)
             spec_text = self.small_font.render(f"👁 {spec_count} Spectators", True, self.COLORS['info'])
-            self.screen.blit(spec_text, (sidebar_x + 20, 165))
+            self.screen.blit(spec_text, (sidebar_x + 20, 185))
 
-        # Pannello chat
-        chat_y = 200
+        # Pannello chat - SPOSTATO PIÙ IN BASSO
+        chat_y = 220  # Da 200 a 220
         chat_panel = pygame.Rect(sidebar_x + 10, chat_y, self.sidebar_width - 20,
                                  self.map_height_px - chat_y - 10)
         self.draw_rounded_rect(self.screen, self.COLORS['bg_light'], chat_panel)
@@ -657,16 +662,16 @@ class BombermanClient:
         chat_title = self.small_font.render("💬 Chat", True, self.COLORS['text_primary'])
         self.screen.blit(chat_title, (sidebar_x + 20, chat_y + 5))
 
-        # Messaggi
+        # Messaggi - RIDOTTO A 4 MESSAGGI
         msg_y = chat_y + 30
         if "chat_messages" in self.state:
-            for msg in self.state["chat_messages"][-5:]:
+            for msg in self.state["chat_messages"][-4:]:  # Da 5 a 4 messaggi
                 if msg_y > self.map_height_px - 50:
                     break
 
                 if msg["is_system"]:
                     color = self.COLORS['warning']
-                    text = msg["message"][:22]
+                    text = msg["message"][:20]  # Ridotto da 22 a 20 caratteri
                 elif msg.get("is_spectator", False):
                     color = self.COLORS['info']
                     sender_id = msg["player_id"]
@@ -675,14 +680,14 @@ class BombermanClient:
                         if int(spec_id) == int(sender_id):
                             sender_name = spec_data.get("name", f"Spectator {sender_id}")
                             break
-                    text = f"{sender_name}: {msg['message']}"[:22]
+                    text = f"{sender_name}: {msg['message']}"[:20]
                 else:
                     pid = int(msg["player_id"])
                     color = PLAYER_COLORS[pid % len(PLAYER_COLORS)]
                     sender_name = f"Player {pid}"
                     if str(pid) in self.state.get("players", {}):
                         sender_name = self.state["players"][str(pid)].get("name", sender_name)
-                    text = f"{sender_name}: {msg['message']}"[:22]
+                    text = f"{sender_name}: {msg['message']}"[:20]
 
                 msg_surf = self.small_font.render(text, True, color)
                 self.screen.blit(msg_surf, (sidebar_x + 15, msg_y))
@@ -695,7 +700,7 @@ class BombermanClient:
         if self.chat_active:
             pygame.draw.rect(self.screen, (40, 40, 50), input_rect, border_radius=5)
             pygame.draw.rect(self.screen, self.COLORS['success'], input_rect, 2, border_radius=5)
-            input_text = self.small_font.render(self.chat_input[-18:], True, self.COLORS['text_primary'])
+            input_text = self.small_font.render(self.chat_input[-15:], True, self.COLORS['text_primary'])  # Ridotto da 18 a 15
             self.screen.blit(input_text, (sidebar_x + 18, input_y + 2))
 
             if self.cursor_visible:
@@ -710,57 +715,190 @@ class BombermanClient:
         pygame.display.flip()
 
     def draw_victory(self):
-        """Disegna la schermata di vittoria."""
-        # Sfondo animato
-        for i in range(0, self.screen.get_height(), 20):
-            color_intensity = int(abs(math.sin((i + self.animation_timer) * 0.01)) * 30 + 20)
-            pygame.draw.rect(self.screen, (color_intensity, color_intensity, color_intensity + 10),
-                             (0, i, self.screen.get_width(), 20))
+        """Disegna la schermata di vittoria con layout ottimizzato."""
+        # Sfondo animato con gradiente
+        self.draw_gradient_rect(self.screen, (10, 5, 20), (30, 15, 50),
+                                (0, 0, self.screen.get_width(), self.screen.get_height()))
+
+        # Particelle animate di sfondo
+        for i in range(20):  # Ridotte da 30 a 20
+            x = (self.animation_timer * 2 + i * 37) % self.screen.get_width()
+            y = (self.animation_timer + i * 23) % self.screen.get_height()
+            size = 2 + (i % 3)
+            alpha = int(abs(math.sin((self.animation_timer + i * 10) * 0.02)) * 100 + 50)
+            color = (alpha, alpha // 2, alpha)
+            pygame.draw.circle(self.screen, color, (int(x), int(y)), size)
 
         winner_id = self.state.get("winner_id", -2)
 
-        # Box principale
-        main_box = pygame.Rect(140, 100, 400, 250)
-        self.draw_gradient_rect(self.screen, (40, 40, 60), (60, 60, 80), main_box)
-        pygame.draw.rect(self.screen, (255, 255, 255), main_box, 4, border_radius=20)
+        # === SEZIONE SUPERIORE: BOX VITTORIA COMPATTO ===
+        main_box = pygame.Rect(120, 30, 440, 180)  # Molto più compatto
 
-        # Testo vittoria
+        # Ombra del box
+        shadow_box = main_box.copy()
+        shadow_box.x += 5
+        shadow_box.y += 5
+        self.draw_rounded_rect(self.screen, (5, 5, 15, 100), shadow_box, radius=15)
+
+        # Box principale con gradiente
+        self.draw_gradient_rect(self.screen, (60, 60, 80), (40, 40, 60), main_box)
+
+        # Bordo animato
+        border_pulse = abs(math.sin(self.animation_timer * 0.03)) * 30 + 180
+        border_color = (int(border_pulse), int(border_pulse), 200)
+        pygame.draw.rect(self.screen, border_color, main_box, 3, border_radius=15)
+
+        # Determina il vincitore e i colori
         if winner_id == -1:
             victory_text = "DRAW!"
             victory_color = self.COLORS['warning']
-            sub_text = "No survivors..."
+            sub_text = "No survivors"
         elif winner_id >= 0:
-            victory_text = f"PLAYER {winner_id}"
+            winner_name = f"Player {winner_id}"
+            if str(winner_id) in self.state.get("players", {}):
+                winner_name = self.state["players"][str(winner_id)].get("name", f"Player {winner_id}")
+
+            # Accorcia il nome se troppo lungo
+            if len(winner_name) > 12:
+                winner_name = winner_name[:12] + "..."
+
+            victory_text = winner_name.upper()
             victory_color = PLAYER_COLORS[winner_id % len(PLAYER_COLORS)]
-            sub_text = "VICTORY!"
+            sub_text = "WINS!"
         else:
             victory_text = "GAME OVER"
             victory_color = self.COLORS['danger']
             sub_text = ""
 
-        main_text = self.big_font.render(victory_text, True, (255, 255, 255))
-        main_rect = main_text.get_rect(center=(340, 160))
+        # Testo principale (più piccolo per stare nel box)
+        main_text = self.title_font.render(victory_text, True, (255, 255, 255))
+        main_rect = main_text.get_rect(center=(340, 100))  # Centrato nel box più piccolo
         self.screen.blit(main_text, main_rect)
 
+        # Sottotitolo
         if sub_text:
-            sub_surf = self.title_font.render(sub_text, True, victory_color)
-            sub_rect = sub_surf.get_rect(center=(340, 210))
+            sub_surf = self.font.render(sub_text, True, victory_color)
+            sub_rect = sub_surf.get_rect(center=(340, 135))
             self.screen.blit(sub_surf, sub_rect)
 
-        # Timer
+        # Timer compatto
         timer = self.state.get("victory_timer", 0)
         if timer > 0:
-            timer_text = f"Auto-return in {timer // 10 + 1}..."
-            timer_surf = self.font.render(timer_text, True, self.COLORS['text_secondary'])
-            timer_rect = timer_surf.get_rect(center=(340, 250))
+            timer_seconds = timer // 10 + 1
+            timer_text = f"Lobby in {timer_seconds}s"
+            timer_color = self.COLORS['text_secondary']
+
+            if timer_seconds <= 3:
+                pulse = abs(math.sin(self.animation_timer * 0.1)) * 50
+                timer_color = (200 + int(pulse), 200 + int(pulse), 100)
+
+            timer_surf = self.small_font.render(timer_text, True, timer_color)
+            timer_rect = timer_surf.get_rect(center=(340, 165))
             self.screen.blit(timer_surf, timer_rect)
 
+        # === SEZIONE CENTRALE: CONTROLLI ===
+        control_y = 225
         if not self.is_spectator:
-            hint_text = self.small_font.render("Press ENTER to play again", True, self.COLORS['text_secondary'])
-            hint_rect = hint_text.get_rect(center=(340, 340))
-            self.screen.blit(hint_text, hint_rect)
+            # Pulsante compatto
+            button_rect = pygame.Rect(250, control_y, 180, 30)
+            button_pulse = abs(math.sin(self.animation_timer * 0.05)) * 15
+            button_color1 = (50 + button_pulse, 150 + button_pulse, 50)
+            button_color2 = (30 + button_pulse, 100 + button_pulse, 30)
 
+            self.draw_gradient_rect(self.screen, button_color1, button_color2, button_rect)
+            pygame.draw.rect(self.screen, (100, 255, 100), button_rect, 2, border_radius=15)
+
+            button_text = self.font.render("ENTER: Play Again", True, (255, 255, 255))
+            button_text_rect = button_text.get_rect(center=button_rect.center)
+            self.screen.blit(button_text, button_text_rect)
+        else:
+            spec_text = self.font.render("Waiting for next game...", True, self.COLORS['text_secondary'])
+            spec_rect = spec_text.get_rect(center=(340, control_y + 15))
+            self.screen.blit(spec_text, spec_rect)
+
+        # === SEZIONE INFERIORE: CHAT INGRANDITA ===
+        chat_y = 270
+        chat_height = self.screen.get_height() - chat_y - 10  # Usa tutto lo spazio rimanente
+        chat_box = pygame.Rect(30, chat_y, self.screen.get_width() - 60, chat_height)
+
+        self.draw_rounded_rect(self.screen, self.COLORS['bg_medium'], chat_box, radius=10)
+        pygame.draw.rect(self.screen, self.COLORS['border'], chat_box, 2, border_radius=10)
+
+        # Chat header
+        chat_title = self.font.render("Chat", True, self.COLORS['text_primary'])
+        self.screen.blit(chat_title, (45, chat_y + 8))
+
+        # Area messaggi
+        msg_start_y = chat_y + 35
+        msg_area_height = chat_height - 70  # Spazio per header e input
+
+        if "chat_messages" in self.state:
+            # Calcola quanti messaggi possono stare
+            max_messages = max(1, msg_area_height // 20)
+            msg_y = msg_start_y
+
+            for msg in self.state["chat_messages"][-max_messages:]:
+                if msg_y + 20 > chat_y + chat_height - 35:  # Lascia spazio per input
+                    break
+
+                if msg["is_system"]:
+                    color = self.COLORS['warning']
+                    text = f"[SYSTEM] {msg['message']}"
+                elif msg.get("is_spectator", False):
+                    color = self.COLORS['info']
+                    sender_id = msg["player_id"]
+                    sender_name = "Unknown"
+                    for spec_id, spec_data in self.state.get("spectators", {}).items():
+                        if int(spec_id) == int(sender_id):
+                            sender_name = spec_data.get("name", f"Spectator {sender_id}")
+                            break
+                    text = f"[SPEC] {sender_name}: {msg['message']}"
+                else:
+                    pid = int(msg["player_id"])
+                    color = PLAYER_COLORS[pid % len(PLAYER_COLORS)]
+                    sender_name = f"Player {pid}"
+                    if str(pid) in self.state.get("players", {}):
+                        sender_name = self.state["players"][str(pid)].get("name", sender_name)
+                    text = f"{sender_name}: {msg['message']}"
+
+                # Tronca il testo se troppo lungo
+                max_chars = 65
+                if len(text) > max_chars:
+                    text = text[:max_chars-3] + "..."
+
+                msg_surf = self.small_font.render(text, True, color)
+                self.screen.blit(msg_surf, (45, msg_y))
+                msg_y += 20
+
+        # Input chat in fondo
+        input_y = chat_y + chat_height - 30
+        input_rect = pygame.Rect(40, input_y, self.screen.get_width() - 80, 25)
+
+        if self.chat_active:
+            pygame.draw.rect(self.screen, (40, 40, 50), input_rect, border_radius=8)
+            pygame.draw.rect(self.screen, self.COLORS['success'], input_rect, 2, border_radius=8)
+
+            display_text = self.chat_input
+            if len(display_text) > 60:  # Limita la visualizzazione
+                display_text = "..." + display_text[-57:]
+
+            input_text = self.small_font.render(display_text, True, self.COLORS['text_primary'])
+            self.screen.blit(input_text, (45, input_y + 3))
+
+            if self.cursor_visible:
+                cursor_x = 45 + input_text.get_width()
+                if cursor_x < input_rect.right - 10:  # Non andare oltre il bordo
+                    pygame.draw.line(self.screen, self.COLORS['success'],
+                                     (cursor_x, input_y + 3), (cursor_x, input_y + 20), 2)
+        else:
+            pygame.draw.rect(self.screen, self.COLORS['bg_light'], input_rect, border_radius=8)
+            pygame.draw.rect(self.screen, self.COLORS['border'], input_rect, 1, border_radius=8)
+            hint = self.small_font.render("Press T to chat", True, self.COLORS['text_disabled'])
+            self.screen.blit(hint, (45, input_y + 3))
+
+        # Aggiorna animazione
         self.animation_timer += 1
+
         pygame.display.flip()
 
     def handle_game_input(self, event):
