@@ -27,6 +27,7 @@ MAX_MESSAGE_LENGTH   = 50
 class Player:
     x: int
     y: int
+    name: str = ""  # Aggiunto campo nome
     alive: bool = True
     lives: int = 3
     disconnected: bool = False
@@ -37,6 +38,7 @@ class Player:
     original_client_id: Optional[str] = None
     already_reconnected: bool = False
     was_alive_before_disconnect: bool = True
+    temporarily_away: bool = False  # Aggiunto per distinguere uscite temporanee
 
 @dataclass
 class Bomb:
