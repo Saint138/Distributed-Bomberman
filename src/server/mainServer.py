@@ -1,6 +1,11 @@
 import socket, threading, time, json, os, sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), ".")))
 
+
+# Aggiungi questa riga per includere la directory padre
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
 from server.game import GameServer
 from server.network import handle_client
 

@@ -30,12 +30,12 @@ class GameServer:
         self.s = State()
 
     # ---------- Lobby / Host ----------
-    def add_player(self, player_id: int) -> None:
-        core_add_player(self.s, player_id)
+    def add_player(self, player_id: int, name: str = "") -> None:
+        core_add_player(self.s, player_id, name or f"Player {player_id}")
         if connected_players_count(self.s) == 1:
             self.s.current_host_id = player_id
-            self.add_chat_message(-1, f"Player {player_id} is the host", is_system=True)
-        self.add_chat_message(-1, f"Player {player_id} joined the lobby", is_system=True)
+            self.add_chat_message(-1, f"{name or f'Player {player_id}'} is the host", is_system=True)
+        self.add_chat_message(-1, f"{name or f'Player {player_id}'} joined the lobby", is_system=True)
 
     def get_current_host(self) -> int:
         return core_get_current_host(self.s)
@@ -51,12 +51,16 @@ class GameServer:
         self.add_chat_message(-1, "Returned to lobby. Ready for a new game!", is_system=True)
 
     # ---------- Spettatori ----------
-    def add_spectator(self) -> int:
+    def add_spectator(self, name: str = "") -> int:
         sid = self.s.next_spectator_id
         self.s.next_spectator_id += 1
-        self.s.spectators[sid] = {"connected": True, "join_time": self.s.now()}
-        print(f"[SPECTATOR] Spectator {sid} joined")
-        self.add_chat_message(-1, f"Spectator {sid} joined", is_system=True)
+        self.s.spectators[sid] = {
+            "connected": True,
+            "join_time": self.s.now(),
+            "name": name or f"Spectator {sid}"
+        }
+        print(f"[SPECTATOR] Spectator {sid} ({name}) joined")
+        self.add_chat_message(-1, f"{name or f'Spectator {sid}'} joined as spectator", is_system=True)
         return sid
 
     def remove_spectator(self, sid: int) -> None:
@@ -65,9 +69,10 @@ class GameServer:
             print(f"[SPECTATOR] Spectator {sid} left")
             self.add_chat_message(-1, f"Spectator {sid} left", is_system=True)
 
-    def convert_spectator_to_player(self, spectator_id: int, spectator_client_id: Optional[str] = None) -> int:
+    def convert_spectator_to_player(self, spectator_id: int, spectator_name: str = "") -> int:
         if spectator_id not in self.s.spectators:
             return -1
+
         # trova slot libero o timeout scaduto
         new_pid = None
         for i in range(4):
@@ -80,15 +85,16 @@ class GameServer:
                     del self.s.client_player_mapping[cid]
                 del self.s.players[i]
                 new_pid = i; break
+
         if new_pid is None:
             return -1
 
+        # Rimuovi spettatore e aggiungi come player
+        name = self.s.spectators[spectator_id].get("name", spectator_name or f"Player {new_pid}")
         del self.s.spectators[spectator_id]
-        self.add_player(new_pid)
-        if spectator_client_id:
-            self.s.players[new_pid].original_client_id = spectator_client_id
-            self.register_client_player(spectator_client_id, new_pid)
-        self.add_chat_message(-1, f"Spectator {spectator_id} joined as Player {new_pid}", is_system=True)
+        self.add_player(new_pid, name)
+
+        self.add_chat_message(-1, f"{name} joined as Player {new_pid}", is_system=True)
         return new_pid
 
     # ---------- Reconnect ----------
@@ -120,16 +126,26 @@ class GameServer:
             del self.s.client_player_mapping[cid]
             print(f"[CLEANUP] Removed obsolete client mapping: {cid}")
 
-    def handle_player_disconnect(self, player_id: int) -> None:
+    def handle_player_disconnect(self, player_id: int, temporarily_away: bool = False) -> None:
         p = self.s.players.get(player_id)
         if not p: return
+
         p.was_alive_before_disconnect = p.alive
         p.alive = False
         p.disconnected = True
         p.disconnect_time = time.time()
         p.disconnect_time_left = DISCONNECT_TIMEOUT
         p.already_reconnected = False
-        print(f"[DISCONNECT] Player {player_id} disconnected (client: {p.original_client_id})")
+        p.temporarily_away = temporarily_away
+
+        player_name = p.name or f"Player {player_id}"
+        print(f"[DISCONNECT] {player_name} disconnected (client: {p.original_client_id})")
+
+        if temporarily_away:
+            self.add_chat_message(-1, f"{player_name} left temporarily", is_system=True)
+        else:
+            self.add_chat_message(-1, f"{player_name} disconnected", is_system=True)
+
         if self.s.game_state == GAME_STATE_LOBBY and player_id == self.get_current_host():
             self.get_current_host()
         if self.s.game_state == GAME_STATE_PLAYING:
@@ -240,3 +256,6 @@ class GameServer:
                 "victory_timer": self.s.victory_timer
             })
         return base
+
+    def check_victory(self) -> bool:
+        return core_check_victory(self.s)

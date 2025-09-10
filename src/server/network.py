@@ -1,37 +1,14 @@
 import json
 
-def handle_client(conn, addr, clients, game, user_id, is_spectator=False, player_slots=None, preread_handshake=None):
+def handle_client(conn, addr, clients, game, user_id, is_spectator=False, player_slots=None, player_name="", client_id=""):
     """
     Controller socket: traduce i messaggi testuali in chiamate al GameServer.
     """
     user_type = "Spectator" if is_spectator else "Player"
-    print(f"[HANDLER] start {user_type} {user_id} from {addr}")
+    display_name = player_name or f"{user_type} {user_id}"
+    print(f"[HANDLER] start {user_type} {user_id} ({display_name}) from {addr}")
 
-    client_id = None
     try:
-        # handshake già letto dal main
-        if preread_handshake:
-            try:
-                hs = json.loads(preread_handshake.decode().strip())
-                if hs.get("type") == "handshake":
-                    client_id = hs.get("client_id")
-                    print(f"[HANDLER] client_id={client_id}")
-            except Exception as e:
-                print(f"[HANDLER] handshake parse error: {e}")
-
-        # riconnessione del player (se necessario)
-        if not is_spectator and user_id in game.s.players:
-            if game.s.players[user_id].disconnected:
-                if game.reconnect_player(user_id, client_id):
-                    print(f"[HANDLER] Player {user_id} successfully reconnected")
-                else:
-                    print(f"[HANDLER] Failed to reconnect player {user_id}")
-                    conn.close(); return
-
-        # invia identità al client
-        init_msg = json.dumps({"player_id": user_id, "is_spectator": is_spectator})
-        conn.sendall((init_msg + "\n").encode())
-
         # loop principale
         while True:
             data = conn.recv(1024)
@@ -58,7 +35,8 @@ def handle_client(conn, addr, clients, game, user_id, is_spectator=False, player
                         game.add_chat_message(user_id, chat)
                 elif msgU == "JOIN_GAME":
                     if game.s.game_state == game.S.GAME_STATE_LOBBY:
-                        new_pid = game.convert_spectator_to_player(user_id, client_id)
+                        spec_name = player_name or f"Spectator {user_id}"
+                        new_pid = game.convert_spectator_to_player(user_id, spec_name)
                         if new_pid >= 0:
                             print(f"[CONVERT] Spectator {user_id} -> Player {new_pid}")
                             is_spectator = False
@@ -82,12 +60,17 @@ def handle_client(conn, addr, clients, game, user_id, is_spectator=False, player
             if msgU == "START_GAME":
                 if game.s.game_state == game.S.GAME_STATE_LOBBY and user_id == game.get_current_host():
                     if game.start_game():
-                        print(f"[GAME] Player {user_id} started the game")
+                        print(f"[GAME] Player {user_id} ({display_name}) started the game")
                 continue
             if msgU == "PLAY_AGAIN":
                 if game.s.game_state == game.S.GAME_STATE_VICTORY:
                     game.return_to_lobby()
                 continue
+            if msgU == "LEAVE_TEMPORARILY":
+                # Disconnessione temporanea
+                print(f"[TEMP LEAVE] Player {user_id} ({display_name}) leaving temporarily")
+                game.handle_player_disconnect(user_id, temporarily_away=True)
+                break
             if message.startswith("CHAT:"):
                 chat = message[5:]
                 if chat.strip():
@@ -98,9 +81,10 @@ def handle_client(conn, addr, clients, game, user_id, is_spectator=False, player
     except Exception as e:
         print(f"[HANDLER] Error: {e}")
     finally:
-        print(f"[HANDLER] Disconnecting {user_type} {user_id} from {addr}")
+        print(f"[HANDLER] Disconnecting {user_type} {user_id} ({display_name}) from {addr}")
         try: conn.close()
         except: pass
+
         if conn in clients:
             try: clients.remove(conn)
             except ValueError: pass
@@ -112,6 +96,9 @@ def handle_client(conn, addr, clients, game, user_id, is_spectator=False, player
             try:
                 if player_slots is not None and isinstance(user_id, int) and 0 <= user_id < 4:
                     player_slots[user_id] = False
-                game.handle_player_disconnect(user_id)
+                # Non chiamare handle_player_disconnect se è un'uscita temporanea già gestita
+                if not (hasattr(game.s.players.get(user_id, {}), 'temporarily_away') and
+                        game.s.players[user_id].temporarily_away):
+                    game.handle_player_disconnect(user_id, temporarily_away=False)
             except Exception as e:
                 print(f"[HANDLER] player disconnect error: {e}")
