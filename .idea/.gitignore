@@ -232,3 +232,13 @@ core.*
 
 test_output/
 test_results/
+/codeStyles/codeStyleConfig.xml
+/copilot.data.migration.agent.xml
+/copilot.data.migration.ask.xml
+/copilot.data.migration.ask2agent.xml
+/copilot.data.migration.edit.xml
+/misc.xml
+/modules.xml
+/codeStyles/Project.xml
+/vcs.xml
+/workspace.xml
