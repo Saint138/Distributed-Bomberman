@@ -1,8 +1,10 @@
-
+**/__pycache__/
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.pyc
+*.pyo
 
 .Python
 build/
@@ -232,7 +234,7 @@ core.*
 
 test_output/
 test_results/
-/codeStyles/codeStyleConfig.xml
+/.idea/codeStyles/codeStyleConfig.xml
 /copilot.data.migration.agent.xml
 /copilot.data.migration.ask.xml
 /copilot.data.migration.ask2agent.xml
