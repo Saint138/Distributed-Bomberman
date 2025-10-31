@@ -123,9 +123,9 @@ class TestCommandController(unittest.TestCase):
 
     def test_handle_command_case_insensitive(self):
         """Test command handling case is insensitive"""
-        response = self.controller.handle_command("bomb", 0, False, "Player0")
+        self.controller.handle_command("bomb", 0, False, "Player0")
         self.mock_game_service.place_bomb.assert_called_with(0)
-        response = self.controller.handle_command("BoMb", 1, False, "Player1")
+        self.controller.handle_command("BoMb", 1, False, "Player1")
         self.mock_game_service.place_bomb.assert_called_with(1)
 
 
@@ -205,9 +205,10 @@ class TestNetworkManager(unittest.TestCase):
 
     def test_handle_invalid_json(self):
         """Test handle invalid JSON message"""
+        mock_callback = Mock()
+        self.network.on_state_update = mock_callback
         self.network._handle_message("invalid json {")
-        if self.network.on_state_update:
-            self.network.on_state_update.assert_not_called()
+        mock_callback.assert_not_called()
 
     def test_stop_network(self):
         """Test stop network"""

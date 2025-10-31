@@ -4,7 +4,7 @@ Test suite for the GameState and GameController classes of the client
 import unittest
 import sys
 import os
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import Mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 

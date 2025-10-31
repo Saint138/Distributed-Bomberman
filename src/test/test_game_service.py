@@ -129,10 +129,14 @@ class TestGameService(unittest.TestCase):
         self.game.add_player(0, "Player0")
         self.game.add_player(1, "Player1")
         self.game.start_game()
-        initial_x = self.game.state.players[0].x
-        initial_y = self.game.state.players[0].y
+        player = self.game.state.players[0]
+        initial_x = player.x
+        initial_y = player.y
+        if initial_y + 1 < len(self.game.state.game_map):
+            self.game.state.game_map[initial_y + 1][initial_x] = 0  # TILE_EMPTY
         self.game.move_player(0, "DOWN")
-        self.assertIn(0, self.game.state.players)
+        self.assertEqual(player.x, initial_x)
+        self.assertEqual(player.y, initial_y + 1)
 
     def test_place_bomb(self):
         """Test bomb placement"""
