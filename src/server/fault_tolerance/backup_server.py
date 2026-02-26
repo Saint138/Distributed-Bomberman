@@ -1,204 +1,242 @@
+# src/server/fault_tolerance/backup_server.py
 """
-Backup server with primary monitoring and automatic failover
+Backup server -- monitors the primary via heartbeat, promotes itself on failure.
+
+Key invariant
+-------------
+When promoted this backup MUST re-open the game socket on `promoted_game_port`
+(= PRIMARY_GAME_PORT, 5556) so that the proxy's fixed backend_port keeps
+working with zero reconfiguration.
+
+The promotion callback (defined in mainServer._on_promotion) is responsible
+for actually opening that TCP socket.
 """
-import socket
-import threading
+import os
 import pickle
+import socket
+import sys
+import threading
 import time
-from typing import Tuple, Optional, Callable
+from typing import Callable, Optional
+
+
+_here = os.path.dirname(os.path.abspath(__file__))
+_root = os.path.abspath(os.path.join(_here, "..", "..", ".."))
+_src  = os.path.join(_root, "src")
+for _p in (_root, _src):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+from common.constants import PRIMARY_GAME_PORT, BACKUP_STATE_PORT, PRIMARY_HEARTBEAT_PORT
 from .failure_detector import FailureDetector
 
 
 class BackupServer:
     """
-    Backup server che:
-    - Monitora il primary tramite heartbeat
-    - Riceve state updates dal primary
-    - Si promuove a primary in caso di fallimento
+    Backup that:
+    1. Opens a state-receiver socket (state_port) -- primary pushes snapshots here.
+    2. Probes the primary's heartbeat port every 0.5 s.
+    3. On timeout -> calls on_promotion(replicated_state).
     """
-    
-    def __init__(self, primary_host: str, primary_port: int, 
-                 heartbeat_port: int = 5565, state_port: int = 5556,
-                 on_promotion: Optional[Callable] = None):
+
+    def __init__(
+        self,
+        primary_host: str,
+        primary_heartbeat_port: int = PRIMARY_HEARTBEAT_PORT,
+        state_port: int = BACKUP_STATE_PORT,
+        promoted_game_port: int = PRIMARY_GAME_PORT,
+        on_promotion: Optional[Callable] = None,
+    ):
         """
         Args:
-            primary_host: Host del primary server
-            primary_port: Porta del primary server
-            heartbeat_port: Porta per heartbeat monitoring (primary_port + 10)
-            state_port: Porta DEDICATA per ricevere state updates (primary_port + 1)
-            on_promotion: Callback chiamata quando diventa primary
+            primary_host           : hostname of the primary (e.g. "localhost")
+            primary_heartbeat_port : port the primary listens on for HEARTBEAT probes
+                                     (e.g. 5565 = PRIMARY_GAME_PORT + 9)
+            state_port             : port THIS backup listens on for state snapshots
+                                     (e.g. 5557 = PRIMARY_GAME_PORT + 1)
+            promoted_game_port     : port this process must serve on after promotion
+                                     MUST equal the primary's game port (5556) so the
+                                     proxy reconnects without reconfiguration
+            on_promotion           : callback(replicated_state) invoked on promotion
         """
         self.primary_host = primary_host
-        self.primary_port = primary_port
-        self.heartbeat_port = heartbeat_port
+        self.primary_heartbeat_port = primary_heartbeat_port
         self.state_port = state_port
+        self.promoted_game_port = promoted_game_port
         self.on_promotion = on_promotion
-        
+
         self.is_primary = False
         self.running = True
         self.replicated_state = None
+
         self.failure_detector = FailureDetector(timeout=1.5)
-        
-        print(f"[BACKUP] Initialized - monitoring {primary_host}:{heartbeat_port}")
-        
+        self._state_sock: Optional[socket.socket] = None
+
+        print(
+            f"[BACKUP] Initialized  "
+            f"heartbeat={primary_host}:{primary_heartbeat_port}  "
+            f"state_port={state_port}  "
+            f"promoted_game_port={promoted_game_port}"
+        )
+
+  
+
     def start(self) -> None:
-        """Avvia monitoring e state receiver"""
-        monitor_thread = threading.Thread(
-            target=self._monitor_primary,
-            daemon=True
-        )
-        monitor_thread.start()
-        print(f"[BACKUP] Primary monitor started")
-        
-        receiver_thread = threading.Thread(
+        """Start state-receiver and heartbeat monitor threads."""
+        threading.Thread(
             target=self._receive_state_updates,
-            daemon=True
+            daemon=True,
+            name="backup-state-recv",
+        ).start()
+        print(f"[BACKUP] State receiver starting on port {self.state_port}")
+
+        threading.Thread(
+            target=self._monitor_primary,
+            daemon=True,
+            name="backup-heartbeat-monitor",
+        ).start()
+        print(
+            f"[BACKUP] Heartbeat monitor starting -> "
+            f"{self.primary_host}:{self.primary_heartbeat_port}"
         )
-        receiver_thread.start()
-        print(f"[BACKUP] State receiver started on port {self.state_port}")
-        
+
+    def get_replicated_state(self):
+        return self.replicated_state
+
+    def stop(self) -> None:
+        print("[BACKUP] Stopping...")
+        self.running = False
+        if self._state_sock:
+            try:
+                self._state_sock.close()
+            except Exception:
+                pass
+
+
     def _monitor_primary(self) -> None:
-        """
-        Monitora il primary server tramite heartbeat
-        Heartbeat ogni 0.5s con timeout 1.5s → rileva failure in ~2s
-        """
-        print(f"[BACKUP] Monitoring primary at {self.primary_host}:{self.heartbeat_port}")
-        
+        print(
+            f"[BACKUP] Monitoring primary heartbeat at "
+            f"{self.primary_host}:{self.primary_heartbeat_port}"
+        )
         while not self.is_primary and self.running:
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(0.5) 
-                sock.connect((self.primary_host, self.heartbeat_port))
-                sock.sendall(b"HEARTBEAT")
-                response = sock.recv(1024)
-                if response == b"ALIVE":
-                    self.failure_detector.update_heartbeat()
-                sock.close()
-                
-            except (ConnectionRefusedError, socket.timeout, OSError):
-                pass
-            except Exception as e:
-                print(f"[BACKUP] Heartbeat error: {e}")
-                
+            self._probe_heartbeat()
+
             if not self.failure_detector.check_primary_status():
-                print("[BACKUP] WARNING: PRIMARY FAILURE DETECTED!")
+                print("[BACKUP] [WARN] PRIMARY FAILURE DETECTED")
                 self._promote_to_primary()
-                break
-                
-            time.sleep(0.5)  
-            
-    def _promote_to_primary(self) -> None:
-        """
-        Promuove questo backup a primary
-        Dal PDF pag 29: "mascherare i fallimenti tramite ridondanza"
-        """
-        print("=" * 70)
-        print("[BACKUP->PRIMARY] PROMOTING TO PRIMARY SERVER")
-        print("=" * 70)
-        
-        self.is_primary = True
-        
-        if self.on_promotion:
-            self.on_promotion(self.replicated_state)
-            if self.replicated_state:
-                print("[BACKUP->PRIMARY] State restored from replica")
-            else:
-                print("[BACKUP->PRIMARY] Starting fresh (no replicated state)")
-        else:
-            print("[BACKUP->PRIMARY] WARNING: No promotion callback defined!")
-            
-        print("[BACKUP->PRIMARY] Now serving as PRIMARY")
-        
-    def _handle_state_connection(self, conn, addr, update_counter_ref):
-        """Gestisce una singola connessione di stato in un thread separato"""
-        try:
-            conn.settimeout(5.0)
-            
-            header = b""
-            while b"\n" not in header and len(header) < 1024:
-                chunk = conn.recv(1024)
-                if not chunk:
-                    return
-                header += chunk
-                
-            if b"STATE_UPDATE:" in header:
-                header_line = header.split(b"\n")[0].decode('ascii')
-                size_str = header_line.split(":")[1]
-                state_size = int(size_str)
-                
-                remaining_data = header.split(b"\n", 1)[1] if b"\n" in header else b""
-                state_data = remaining_data
-                
-                while len(state_data) < state_size:
-                    chunk = conn.recv(min(8192, state_size - len(state_data)))
-                    if not chunk:
-                        return
-                    state_data += chunk
-                    
-                if len(state_data) == state_size:
-                    try:
-                        self.replicated_state = pickle.loads(state_data)
-                        update_counter_ref[0] += 1
-                        if update_counter_ref[0] % 20 == 0:
-                            print(f"[BACKUP] State updated (total: {update_counter_ref[0]})")
-                    except Exception as e:
-                        print(f"[BACKUP_ERROR] Pickle failed: {e}")
-                    
-        except Exception as e:
-            if self.running:
-                print(f"[BACKUP_ERROR] Handler error: {e}")
-        finally:
-            try:
-                conn.close()
-            except:
-                pass
-    
-    def _receive_state_updates(self) -> None:
-        """
-        Riceve aggiornamenti di stato dal primary
-        """
+                return
+
+            time.sleep(0.5)
+
+    def _probe_heartbeat(self) -> None:
         sock = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind(("0.0.0.0", self.state_port))
-            sock.listen(10)
-            sock.settimeout(None)
-            
-            print(f"[BACKUP] State receiver listening on port {self.state_port}")
-            update_counter_ref = [0]
-            
-            while not self.is_primary and self.running:
-                try:
-                    conn, addr = sock.accept()
-                    handler_thread = threading.Thread(
-                        target=self._handle_state_connection,
-                        args=(conn, addr, update_counter_ref),
-                        daemon=True
-                    )
-                    handler_thread.start()
-                    
-                except socket.error as e:
-                    if self.running and not self.is_primary:
-                        print(f"[BACKUP_ERROR] Accept error: {e}")
-                    break
-                        
-        except Exception as e:
-            print(f"[BACKUP_ERROR] Fatal error: {e}")
-            import traceback
-            traceback.print_exc()
+            sock.settimeout(0.5)
+            sock.connect((self.primary_host, self.primary_heartbeat_port))
+            sock.sendall(b"HEARTBEAT")
+            resp = sock.recv(64)
+            if resp == b"ALIVE":
+                self.failure_detector.update_heartbeat()
+        except (ConnectionRefusedError, socket.timeout, OSError):
+            pass 
+        except Exception as exc:
+            print(f"[BACKUP] Heartbeat probe error: {exc}")
         finally:
             if sock:
                 try:
                     sock.close()
-                except:
+                except Exception:
                     pass
-                
-    def get_replicated_state(self):
-        """Ritorna lo stato replicato"""
-        return self.replicated_state
-        
-    def stop(self) -> None:
-        """Ferma il backup server"""
-        print("[BACKUP] Stopping...")
-        self.running = False
+
+
+    def _promote_to_primary(self) -> None:
+        print("=" * 70)
+        print("[BACKUP->PRIMARY] PROMOTING TO PRIMARY")
+        print(f"[BACKUP->PRIMARY] Will serve on port {self.promoted_game_port}")
+        if self.replicated_state:
+            print("[BACKUP->PRIMARY] Replicated state available -- will restore")
+        else:
+            print("[BACKUP->PRIMARY] No replicated state -- starting fresh")
+        print("=" * 70)
+
+        self.is_primary = True
+        if self._state_sock:
+            try:
+                self._state_sock.close()
+            except Exception:
+                pass
+
+        if self.on_promotion:
+            self.on_promotion(self.replicated_state)
+        else:
+            print("[BACKUP->PRIMARY] WARNING: no promotion callback set!")
+
+    def _receive_state_updates(self) -> None:
+        try:
+            self._state_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self._state_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self._state_sock.bind(("0.0.0.0", self.state_port))
+            self._state_sock.listen(10)
+            print(f"[BACKUP] State receiver listening on port {self.state_port}")
+
+            update_counter = [0]
+
+            while not self.is_primary and self.running:
+                try:
+                    conn, _ = self._state_sock.accept()
+                    threading.Thread(
+                        target=self._handle_state_conn,
+                        args=(conn, update_counter),
+                        daemon=True,
+                    ).start()
+                except OSError:
+                    break  
+                except Exception as exc:
+                    if self.running and not self.is_primary:
+                        print(f"[BACKUP] State accept error: {exc}")
+                    break
+
+        except Exception as exc:
+            print(f"[BACKUP] State receiver fatal error: {exc}")
+            import traceback
+            traceback.print_exc()
+
+    def _handle_state_conn(self, conn: socket.socket, counter: list) -> None:
+        """Receive one state snapshot from the primary."""
+        try:
+            conn.settimeout(5.0)
+            header_buf = b""
+            while b"\n" not in header_buf and len(header_buf) < 1024:
+                chunk = conn.recv(1024)
+                if not chunk:
+                    return
+                header_buf += chunk
+
+            if b"STATE_UPDATE:" not in header_buf:
+                return
+
+            header_line, remainder = header_buf.split(b"\n", 1)
+            state_size = int(header_line.split(b":")[1])
+
+            payload = remainder
+            while len(payload) < state_size:
+                chunk = conn.recv(min(65536, state_size - len(payload)))
+                if not chunk:
+                    return
+                payload += chunk
+
+            if len(payload) == state_size:
+                self.replicated_state = pickle.loads(payload)
+                counter[0] += 1
+                if counter[0] % 20 == 0:
+                    print(f"[BACKUP] State updated (#{counter[0]})")
+
+        except Exception as exc:
+            if self.running and not self.is_primary:
+                print(f"[BACKUP] State handler error: {exc}")
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass

@@ -1,169 +1,173 @@
-"""
-Auto spawner for automatic backup server creation
-"""
+
 import subprocess
 import sys
 import os
 import time
 import socket
+import threading
 from typing import Optional
+
+_here = os.path.dirname(os.path.abspath(__file__))
+_root = os.path.abspath(os.path.join(_here, "..", "..", ".."))
+_src  = os.path.join(_root, "src")
+for _p in (_root, _src):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+from common.constants import PRIMARY_GAME_PORT
 
 
 class AutoSpawner:
-    """
-    Gestisce la creazione automatica di backup servers
-    
-    Quando un server diventa primary, spawna automaticamente un backup
-    """
-    
-    def __init__(self, base_port: int = 5555):
+    """Spawns and monitors a backup server process."""
+
+    def __init__(self, primary_game_port: int = PRIMARY_GAME_PORT):
         """
         Args:
-            base_port: Porta base per i server
+            primary_game_port: Port the primary game server is listening on.
+                               All backup ports are derived from this value.
         """
-        self.base_port = base_port
+        self.primary_game_port = primary_game_port
+        self.backup_state_port = primary_game_port + 1   # 5557
+        self.backup_game_port  = primary_game_port + 2   # 5558
+
         self.backup_process: Optional[subprocess.Popen] = None
-        
-    def spawn_backup_server(self, primary_port: int) -> Optional[int]:
+        self._monitor_thread: Optional[threading.Thread] = None
+        self._respawn_enabled = True
+
+    def spawn_backup_server(self) -> Optional[int]:
         """
-        Spawna automaticamente un backup server
-        
-        Args:
-            primary_port: Porta del primary server da monitorare
-            
+        Spawn a backup server process.
+
         Returns:
-            Porta STATE RECEIVER del backup server creato, o None se fallito
+            The state-receiver port of the new backup, or None on failure.
         """
-        state_receiver_port = primary_port + 1  # 5556
-        backup_game_port = primary_port + 2     # 5557
-        
-        print(f"[AUTO_SPAWNER] Checking port availability...")
-        print(f"[AUTO_SPAWNER]   Port {state_receiver_port} free: {self._is_port_free(state_receiver_port)}")
-        print(f"[AUTO_SPAWNER]   Port {backup_game_port} free: {self._is_port_free(backup_game_port)}")
-        
-        if not self._is_port_free(state_receiver_port):
-            print(f"[AUTO_SPAWNER] WARNING: Port {state_receiver_port} not available - cannot spawn backup!")
-            return None
-            
-        if not self._is_port_free(backup_game_port):
-            print(f"[AUTO_SPAWNER] WARNING: Port {backup_game_port} not available - cannot spawn backup!")
-            return None
-            
-        print(f"[AUTO_SPAWNER] Spawning backup server")
-        print(f"[AUTO_SPAWNER]   - Game server on port {backup_game_port}")
-        print(f"[AUTO_SPAWNER]   - State receiver on port {state_receiver_port}")
-        
-        python_exe = 'py' if sys.platform == 'win32' else 'python3'
-        
+        print("[AUTO_SPAWNER] Checking port availability...")
+        for port, label in [
+            (self.backup_state_port, "state-receiver"),
+            (self.backup_game_port,  "backup-game"),
+        ]:
+            if not self._is_port_free(port):
+                print(f"[AUTO_SPAWNER] [FAIL] Port {port} ({label}) already in use -- cannot spawn backup")
+                return None
+            print(f"[AUTO_SPAWNER] [OK] Port {port} ({label}) is free")
+
+        return self._do_spawn()
+
+    def stop_backup(self):
+        """Terminate the backup process if it is running."""
+        self._respawn_enabled = False
+        if self.backup_process and self.backup_process.poll() is None:
+            pid = self.backup_process.pid
+            print(f"[AUTO_SPAWNER] Terminating backup server (PID {pid})...")
+            try:
+                self.backup_process.terminate()
+                self.backup_process.wait(timeout=5)
+            except Exception:
+                try:
+                    self.backup_process.kill()
+                except Exception:
+                    pass
+
+    def _do_spawn(self) -> Optional[int]:
+        """Actually launch the subprocess."""
+        python_exe = "py" if sys.platform == "win32" else "python3"
         cmd = [
             python_exe,
-            '-m', 'src.server.mainServer',
-            '--mode', 'backup',
-            '--host', 'localhost',
-            '--port', str(backup_game_port),  
-            '--primary', f'localhost:{primary_port}' 
+            "-m", "src.server.mainServer",
+            "--mode",          "backup",
+            "--host",          "localhost",
+            "--port",          str(self.backup_game_port),
+            "--primary",       f"localhost:{self.primary_game_port}",
+            "--promoted-port", str(self.primary_game_port),
         ]
-        
+
+        project_root = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..", "..")
+        )
+        log_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            f"backup_{self.backup_game_port}.log",
+        )
+
+        print("[AUTO_SPAWNER] Spawning backup server...")
+        print(f"[AUTO_SPAWNER]   game port      : {self.backup_game_port}")
+        print(f"[AUTO_SPAWNER]   state-rcv port : {self.backup_state_port}")
+        print(f"[AUTO_SPAWNER]   promoted port  : {self.primary_game_port}")
+        print(f"[AUTO_SPAWNER]   log            : {log_path}")
+        print(f"[AUTO_SPAWNER]   cwd            : {project_root}")
+
         try:
-            log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
-                                    f"backup_{backup_game_port}.log")
-            log_file = open(log_path, 'w')
-            
-            project_root = os.path.abspath(
-                os.path.join(os.path.dirname(__file__), '..', '..', '..')
-            )
-            print(f"[AUTO_SPAWNER] Working directory: {project_root}")
-            
+            log_file = open(log_path, "w")
+            extra = {}
+            if sys.platform == "win32":
+                extra["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
             self.backup_process = subprocess.Popen(
                 cmd,
                 stdout=log_file,
                 stderr=log_file,
                 stdin=subprocess.DEVNULL,
-                cwd=project_root, 
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0
+                cwd=project_root,
+                **extra,
             )
-            
-            print(f"[AUTO_SPAWNER] Backup server spawned (PID: {self.backup_process.pid})")
-            print(f"[AUTO_SPAWNER] Backup log: {log_path}")
-            
+            print(f"[AUTO_SPAWNER] Backup process PID: {self.backup_process.pid}")
             time.sleep(0.5)
             if self.backup_process.poll() is not None:
-                print(f"[AUTO_SPAWNER] WARNING: Backup server crashed immediately!")
-                try:
-                    log_file.flush()
-                    with open(log_path, 'r') as f:
-                        content = f.read()
-                    if content:
-                        print(f"[AUTO_SPAWNER] Backup log:\n{content}")
-                except:
-                    pass
+                print(f"[AUTO_SPAWNER] [FAIL] Backup crashed immediately -- check {log_path}")
                 return None
-            
-            def _wait_for_backup():
-                deadline = time.time() + 30.0 
-                while time.time() < deadline:
-                    time.sleep(0.5)
-                    if self.backup_process.poll() is not None:
-                        print(f"[AUTO_SPAWNER] WARNING: Backup server died!")
-                        return
-                    if not self._is_port_free(state_receiver_port):
-                        elapsed = time.time() - (deadline - 30.0)
-                        print(f"[AUTO_SPAWNER] Backup ready on port {state_receiver_port} in {elapsed:.1f}s")
-                        return
-                print(f"[AUTO_SPAWNER] WARNING: Backup never opened port {state_receiver_port}")
-            
-            import threading
-            threading.Thread(target=_wait_for_backup, daemon=True).start()
-            
-            print(f"[AUTO_SPAWNER] Backup starting in background...")
-            return state_receiver_port 
-            
-        except Exception as e:
-            print(f"[AUTO_SPAWNER] ERROR: Failed to spawn backup server: {e}")
+
+            threading.Thread(target=self._wait_for_ready, daemon=True).start()
+            self._monitor_thread = threading.Thread(
+                target=self._monitor_backup, daemon=True
+            )
+            self._monitor_thread.start()
+
+            return self.backup_state_port
+
+        except Exception as exc:
+            print(f"[AUTO_SPAWNER] [FAIL] Failed to spawn backup: {exc}")
             return None
-            
-    def _find_free_port(self, start_port: int, max_attempts: int = 10) -> Optional[int]:
-        """
-        Trova una porta libera partendo da start_port
-        
-        Args:
-            start_port: Porta da cui iniziare la ricerca
-            max_attempts: Numero massimo di tentativi
-            
-        Returns:
-            Porta libera o None se non trovata
-        """
-        for offset in range(max_attempts):
-            port = start_port + offset
-            if self._is_port_free(port):
-                return port
-        return None
-        
+
+    def _wait_for_ready(self, timeout: float = 30.0):
+        """Log when the backup state-receiver port becomes available."""
+        deadline = time.time() + timeout
+        t0 = time.time()
+        while time.time() < deadline:
+            if self.backup_process and self.backup_process.poll() is not None:
+                print("[AUTO_SPAWNER] [FAIL] Backup process died while waiting for ready")
+                return
+            if not self._is_port_free(self.backup_state_port):
+                elapsed = time.time() - t0
+                print(
+                    f"[AUTO_SPAWNER] [OK] Backup state-receiver ready on port "
+                    f"{self.backup_state_port} (took {elapsed:.1f}s)"
+                )
+                return
+            time.sleep(0.5)
+        print(
+            f"[AUTO_SPAWNER] [FAIL] Backup never opened port {self.backup_state_port} "
+            f"within {timeout}s"
+        )
+
+    def _monitor_backup(self):
+        """Restart the backup if it dies unexpectedly (unless explicitly stopped)."""
+        while self._respawn_enabled:
+            time.sleep(2.0)
+            if not self._respawn_enabled:
+                break
+            if self.backup_process and self.backup_process.poll() is not None:
+                print("[AUTO_SPAWNER] Backup process died -- respawning...")
+                time.sleep(1.0)
+                if self._respawn_enabled:
+                    self._do_spawn()
+                break
+
     @staticmethod
     def _is_port_free(port: int) -> bool:
-        """
-        Verifica se una porta è libera
-        
-        Args:
-            port: Porta da verificare
-            
-        Returns:
-            True se la porta è libera
-        """
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                s.bind(('0.0.0.0', port))
+                s.bind(("0.0.0.0", port))
                 return True
         except OSError:
             return False
-            
-    def stop_backup(self):
-        """Termina il processo backup se attivo"""
-        if self.backup_process and self.backup_process.poll() is None:
-            print(f"[AUTO_SPAWNER] Terminating backup server (PID: {self.backup_process.pid})")
-            try:
-                self.backup_process.terminate()
-                self.backup_process.wait(timeout=5)
-            except:
-                self.backup_process.kill()

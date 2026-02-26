@@ -1,123 +1,178 @@
-"""
-Primary server with heartbeat responder and state replication
-"""
+
 import socket
 import threading
 import pickle
 import time
-from typing import List, Tuple, Optional
+from typing import List, Tuple
+
+import os
+import sys
+
+_here = os.path.dirname(os.path.abspath(__file__))
+_root = os.path.abspath(os.path.join(_here, "..", "..", ".."))
+_src  = os.path.join(_root, "src")
+for _p in (_root, _src):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 
 class PrimaryServer:
     """
-    Primary server che implementa:
-    - Heartbeat responder per failure detection
-    - State replication verso backup servers
+    Implements the primary-side fault-tolerance duties:
+      * Heartbeat responder  (TCP, one short-lived connection per probe)
+      * Periodic state replication to every registered backup
     """
-    
-    def __init__(self, game_service, backup_servers: List[Tuple[str, int]], 
-                 heartbeat_port: int = 5556, replication_interval: float = 0.5):
+
+    def __init__(
+        self,
+        game_service,
+        backup_state_ports: List[Tuple[str, int]],
+        heartbeat_port: int,
+        replication_interval: float = 0.1,
+    ):
         """
         Args:
-            game_service: GameService instance
-            backup_servers: Lista di (host, port) dei backup servers
-            heartbeat_port: Porta per heartbeat responder
-            replication_interval: Intervallo di replicazione in secondi
+            game_service         : live GameService instance
+            backup_state_ports   : list of (host, state_receiver_port)
+                                   e.g. [("localhost", 5557)]
+            heartbeat_port       : port to listen on for heartbeat probes
+                                   e.g. 5565
+            replication_interval : seconds between state snapshots
         """
         self.game_service = game_service
-        self.backup_servers = backup_servers
+        self.backup_state_ports = list(backup_state_ports)
         self.heartbeat_port = heartbeat_port
         self.replication_interval = replication_interval
         self.running = True
-        self.replication_counter = 0
-        
-        print(f"[PRIMARY] Initialized with {len(backup_servers)} backup(s)")
-        
+        self._replication_counter = 0
+        self._lock = threading.Lock()
+
+        print(
+            f"[PRIMARY] Initialized  heartbeat_port={heartbeat_port}  "
+            f"backups={backup_state_ports}  interval={replication_interval}s"
+        )
+
+
     def start(self) -> None:
-        """Avvia heartbeat responder e replication"""
-        heartbeat_thread = threading.Thread(
+        """Start heartbeat responder and replication threads."""
+        threading.Thread(
             target=self._heartbeat_responder,
-            daemon=True
-        )
-        heartbeat_thread.start()
-        print(f"[PRIMARY] Heartbeat responder started on port {self.heartbeat_port}")
-        replication_thread = threading.Thread(
+            daemon=True,
+            name="primary-heartbeat",
+        ).start()
+        print(f"[PRIMARY] Heartbeat responder starting on port {self.heartbeat_port}")
+
+        threading.Thread(
             target=self._periodic_replication,
-            daemon=True
-        )
-        replication_thread.start()
-        print(f"[PRIMARY] State replication started (interval: {self.replication_interval}s)")
-        
+            daemon=True,
+            name="primary-replication",
+        ).start()
+        print(f"[PRIMARY] State replication starting (interval={self.replication_interval}s)")
+
+    def add_backup(self, host: str, state_port: int) -> None:
+        """Dynamically register a new backup target (thread-safe)."""
+        with self._lock:
+            entry = (host, state_port)
+            if entry not in self.backup_state_ports:
+                self.backup_state_ports.append(entry)
+                print(f"[PRIMARY] Added backup target {host}:{state_port}")
+
+    def stop(self) -> None:
+        print("[PRIMARY] Stopping...")
+        self.running = False
+
+   
+
     def _heartbeat_responder(self) -> None:
-        """
-        Risponde ai heartbeat requests dai backup servers
-        """
+        sock = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind(("0.0.0.0", self.heartbeat_port))
-            sock.listen(5)
+            sock.listen(10)
             sock.settimeout(1.0)
             print(f"[PRIMARY] Heartbeat responder listening on port {self.heartbeat_port}")
-            
+
             while self.running:
                 try:
-                    conn, addr = sock.accept()
-                    data = conn.recv(1024)
-                    
-                    if data == b"HEARTBEAT":
-                        conn.sendall(b"ALIVE")
-            
-                        
-                    conn.close()
-                    
+                    conn, _ = sock.accept()
+                    threading.Thread(
+                        target=self._handle_heartbeat_conn,
+                        args=(conn,),
+                        daemon=True,
+                    ).start()
                 except socket.timeout:
                     continue
-                except Exception as e:
+                except Exception as exc:
                     if self.running:
-                        print(f"[PRIMARY] Heartbeat error: {e}")
-                        
-        except Exception as e:
-            print(f"[PRIMARY] Fatal heartbeat error: {e}")
+                        print(f"[PRIMARY] Heartbeat accept error: {exc}")
+
+        except Exception as exc:
+            print(f"[PRIMARY] Fatal heartbeat error: {exc}")
+        finally:
+            if sock:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _handle_heartbeat_conn(conn: socket.socket) -> None:
+        try:
+            conn.settimeout(1.0)
+            data = conn.recv(64)
+            if data == b"HEARTBEAT":
+                conn.sendall(b"ALIVE")
+        except Exception:
+            pass
         finally:
             try:
-                sock.close()
-            except:
+                conn.close()
+            except Exception:
                 pass
-                
+
+    
     def _periodic_replication(self) -> None:
-        """
-        Replica lo stato periodicamente ai backup servers
-        """
         while self.running:
             try:
-                state_snapshot = pickle.dumps(self.game_service.state)
-                successful_replications = 0
-                for backup_host, backup_port in self.backup_servers:
-                    try:
-                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        sock.settimeout(2.0)
-                        sock.connect((backup_host, backup_port))
-                        state_size = len(state_snapshot)
-                        header = f"STATE_UPDATE:{state_size}\n".encode()
-                        sock.sendall(header + state_snapshot)
-                        sock.close()
-                        successful_replications += 1
-                        
-                    except Exception as e:
-                        if self.replication_counter % 20 == 0: 
-                            print(f"[PRIMARY] Replication failed to {backup_host}:{backup_port}: {e}")
-                        
-                self.replication_counter += 1
-                if self.replication_counter % 10 == 0: 
-                    print(f"[PRIMARY] State replicated to {successful_replications}/{len(self.backup_servers)} backups")
-                    
-            except Exception as e:
-                print(f"[PRIMARY] Replication error: {e}")
-                
+                snapshot = pickle.dumps(self.game_service.state)
+                with self._lock:
+                    targets = list(self.backup_state_ports)
+
+                ok = sum(
+                    1 for host, port in targets
+                    if self._send_snapshot(host, port, snapshot)
+                )
+
+                self._replication_counter += 1
+                if self._replication_counter % 10 == 0:
+                    print(
+                        f"[PRIMARY] Replicated to {ok}/{len(targets)} backup(s)  "
+                        f"(tick #{self._replication_counter})"
+                    )
+
+            except Exception as exc:
+                print(f"[PRIMARY] Replication error: {exc}")
+
             time.sleep(self.replication_interval)
-            
-    def stop(self) -> None:
-        """Ferma il primary server"""
-        print("[PRIMARY] Stopping...")
-        self.running = False
+
+    def _send_snapshot(self, host: str, port: int, snapshot: bytes) -> bool:
+        """Push one state snapshot to a backup. Returns True on success."""
+        sock = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2.0)
+            sock.connect((host, port))
+            header = f"STATE_UPDATE:{len(snapshot)}\n".encode()
+            sock.sendall(header + snapshot)
+            return True
+        except Exception as exc:
+            if self._replication_counter % 20 == 0:
+                print(f"[PRIMARY] Replication failed -> {host}:{port}  ({exc})")
+            return False
+        finally:
+            if sock:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
