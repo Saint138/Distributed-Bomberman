@@ -1,7 +1,6 @@
-
 import socket
 import threading
-import pickle
+import json
 import time
 from typing import List, Tuple
 
@@ -15,7 +14,7 @@ for _p in (_root, _src):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-
+from server.models import state_to_dict
 class PrimaryServer:
     """
     Implements the primary-side fault-tolerance duties:
@@ -135,7 +134,7 @@ class PrimaryServer:
     def _periodic_replication(self) -> None:
         while self.running:
             try:
-                snapshot = pickle.dumps(self.game_service.state)
+                snapshot = json.dumps(state_to_dict(self.game_service.state)).encode("utf-8")
                 with self._lock:
                     targets = list(self.backup_state_ports)
 

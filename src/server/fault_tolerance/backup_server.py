@@ -11,8 +11,8 @@ working with zero reconfiguration.
 The promotion callback (defined in mainServer._on_promotion) is responsible
 for actually opening that TCP socket.
 """
+import json
 import os
-import pickle
 import socket
 import sys
 import threading
@@ -28,6 +28,7 @@ for _p in (_root, _src):
         sys.path.insert(0, _p)
 
 from common.constants import PRIMARY_GAME_PORT, BACKUP_STATE_PORT, PRIMARY_HEARTBEAT_PORT
+from server.models import state_from_dict
 from .failure_detector import FailureDetector
 
 
@@ -226,8 +227,12 @@ class BackupServer:
                     return
                 payload += chunk
 
-            if len(payload) == state_size:
-                self.replicated_state = pickle.loads(payload)
+            if len(payload) == state_size: #try/except cattura casi e logga un messaggio invece di crashare il backup
+                try:
+                    self.replicated_state = state_from_dict(json.loads(payload)) # parsa i byte come JSON, ricostruisce un State
+                except (json.JSONDecodeError, ValueError, TypeError) as exc:
+                    print(f"[BACKUP] Rejected malformed snapshot: {exc}")
+                    return
                 counter[0] += 1
                 if counter[0] % 20 == 0:
                     print(f"[BACKUP] State updated (#{counter[0]})")
