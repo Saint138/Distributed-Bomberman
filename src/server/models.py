@@ -1,5 +1,5 @@
-from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Optional
+from dataclasses import dataclass, field, asdict
+from typing import Any, Dict, List, Tuple, Optional
 import time as _time
 import sys
 import os
@@ -76,3 +76,59 @@ class State:
     def now() -> float:
         """Returns current timestamp"""
         return _time.time()
+    
+
+STATE_VERSION = 1
+
+
+def state_to_dict(state: "State") -> Dict[str, Any]:
+    """Convert a State into a plain dict ready to be JSON-encoded."""
+    return {
+        "version": STATE_VERSION,
+        "game_state": state.game_state,
+        "winner_id": state.winner_id,
+        "victory_timer": state.victory_timer,
+        "game_map": state.game_map,
+        "bombs": [asdict(b) for b in state.bombs],
+        "explosions": [
+            {"positions": [list(p) for p in e.positions], "timer": e.timer}
+            for e in state.explosions
+        ],
+        "players": {str(pid): asdict(p) for pid, p in state.players.items()},
+        "spectators": {str(sid): dict(s) for sid, s in state.spectators.items()},
+        "current_host_id": state.current_host_id,
+        "next_spectator_id": state.next_spectator_id,
+        "chat_messages": list(state.chat_messages),
+        "client_player_mapping": dict(state.client_player_mapping),
+        "block_regen_timer": state.block_regen_timer,
+    }
+
+
+def state_from_dict(d: Dict[str, Any]) -> "State":
+    if d.get("version") != STATE_VERSION:
+        raise ValueError(
+            f"Unsupported snapshot version: got {d.get('version')!r}, "
+            f"expected {STATE_VERSION}"
+        )
+    return State(
+        game_state=d["game_state"],
+        winner_id=d.get("winner_id"),
+        victory_timer=d.get("victory_timer", 0),
+        game_map=[list(row) for row in d.get("game_map", [])],
+        bombs=[Bomb(**b) for b in d.get("bombs", [])],
+        explosions=[
+            Explosion(
+                positions=[tuple(p) for p in e["positions"]],
+                timer=e["timer"],
+            )
+            for e in d.get("explosions", [])
+        ],
+        # Convert string keys back to int (JSON forced them to strings).
+        players={int(pid): Player(**p) for pid, p in d.get("players", {}).items()},
+        spectators={int(sid): dict(s) for sid, s in d.get("spectators", {}).items()},
+        current_host_id=d.get("current_host_id", 0),
+        next_spectator_id=d.get("next_spectator_id", 100),
+        chat_messages=list(d.get("chat_messages", [])),
+        client_player_mapping=dict(d.get("client_player_mapping", {})),
+        block_regen_timer=d.get("block_regen_timer", BLOCK_REGEN_MIN_TIME),
+    )
