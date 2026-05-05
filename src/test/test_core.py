@@ -225,7 +225,6 @@ class TestCore(unittest.TestCase):
         for player in self.state.players.values():
             self.assertTrue(player.alive)
             self.assertEqual(player.lives, 3)
-            self.assertFalse(player.ready)
 
 
 if __name__ == '__main__':

@@ -23,8 +23,8 @@ def _make_state() -> State:
     s.explosions = [Explosion(positions=[(1, 2), (1, 3), (2, 2)], timer=4)]
     s.players = {
         0: Player(x=1, y=1, name="alice", alive=True, lives=3),
-        1: Player(x=13, y=11, name="bob", disconnected=True,
-                  disconnect_time_left=12),
+                1: Player(x=13, y=11, name="bob", disconnected=True,
+                  disconnect_time=1234567890.0),
     }
     s.spectators = {100: {"name": "spec1", "queue_pos": 0}}
     s.client_player_mapping = {"sess-abc": 0, "sess-def": 1}

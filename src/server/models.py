@@ -33,13 +33,7 @@ class Player:
     lives: int = 3
     disconnected: bool = False
     disconnect_time: Optional[float] = None
-    disconnect_time_left: int = 0
-    ready: bool = False
-    was_player: bool = True
     original_client_id: Optional[str] = None
-    already_reconnected: bool = False
-    was_alive_before_disconnect: bool = True
-    temporarily_away: bool = False
 
 @dataclass
 class Bomb:
