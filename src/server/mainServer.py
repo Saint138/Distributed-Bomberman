@@ -6,8 +6,8 @@ import socket
 import sys
 import threading
 import time
+import uuid
 from typing import Optional
-
 
 _here = os.path.dirname(os.path.abspath(__file__))
 _root = os.path.abspath(os.path.join(_here, "..", ".."))
@@ -373,7 +373,7 @@ class BombermanServer:
 
     def _handle_fresh_join(self, conn: socket.socket, addr: tuple):
         name = self._unique_name()
-        session_id = f"client_{random.randint(10000, 99999)}_{time.time()}"
+        session_id = f"client_{uuid.uuid4().hex}"
 
         if self.game_service.state.game_state == "playing":
             self._assign_spectator(conn, addr, name, session_id)
