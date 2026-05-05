@@ -6,6 +6,9 @@ import threading
 import json
 from typing import Callable, Optional
 
+MAX_FRAME_BUFFER_BYTES = 64 * 1024
+
+
 class NetworkManager:
     """Manages TCP connection with the server"""
     def __init__(self, sock: socket.socket):
@@ -55,9 +58,18 @@ class NetworkManager:
                 data = self.sock.recv(8192).decode()
                 if not data:
                     print("[NETWORK] Connection closed by server")
-                    self._notify_disconnected()   # NEW
+                    self._notify_disconnected()
                     break
                 buffer += data
+                if len(buffer) > MAX_FRAME_BUFFER_BYTES:
+                    print(
+                        f"[NETWORK] Frame buffer exceeded "
+                        f"{MAX_FRAME_BUFFER_BYTES} bytes without a newline; "
+                        f"closing connection."
+                    )
+                    self._notify_disconnected()
+                    break
+
                 while "\n" in buffer:
                     line, buffer = buffer.split("\n", 1)
                     if not line.strip():
@@ -65,7 +77,7 @@ class NetworkManager:
                     self._handle_message(line)
             except (OSError, ConnectionError, ConnectionResetError, BrokenPipeError) as e:
                 print(f"[NETWORK] Error receiving state: {e}")
-                self._notify_disconnected()       # NEW
+                self._notify_disconnected()
                 break
             except UnicodeDecodeError as e:
                 print(f"[NETWORK] Decode error: {e}")
