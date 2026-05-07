@@ -175,7 +175,7 @@ class TestNetworkManager(unittest.TestCase):
             "player_name": "TestPlayer"
         })
         self.network._handle_message(message)
-        mock_callback.assert_called_once_with(0, False, "TestPlayer")
+        mock_callback.assert_called_once_with(0, False, "TestPlayer", False)
 
     def test_handle_conversion_success_message(self):
         """Test handle conversion success message"""

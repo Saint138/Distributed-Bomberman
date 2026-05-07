@@ -1,0 +1,31 @@
+[tool.poetry]
+name = "distributed-bomberman"
+version = "0.1.0"
+description = "A real-time, fault-tolerant, multiplayer Bomberman built for the Distributed Systems course."
+authors = [
+    "Gioele Santi <gioele.santi2@studio.unibo.it>",
+    "Giovanni Rinchiuso <giovanni.rinchiuso@studio.unibo.it>",
+]
+license = "GPL-3.0-or-later"
+readme = "README.md"
+packages = [
+    { include = "server", from = "src" },
+    { include = "client", from = "src" },
+    { include = "common", from = "src" },
+]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+pygame = "^2.5"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+
+[tool.poetry.scripts]
+bomberman-server = "server.mainServer:main"
+bomberman-proxy = "server.fault_tolerance.proxy_server:main"
+bomberman-client = "client.mainClient:main"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
