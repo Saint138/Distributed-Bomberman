@@ -310,8 +310,7 @@ class BombermanServer:
             print(f"[RECONNECT] Bad format from {addr}: {msg!r}")
             self._handle_fresh_join(conn, addr)
             return
-
-        session_id = parts[1].strip()
+        session_id = parts[1].split("\n")[0].strip()
         print(f"[RECONNECT] {addr}  session_id={session_id}")
 
         with self.reconnect_lock:
